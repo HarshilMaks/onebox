@@ -1,0 +1,30 @@
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases / Local Files
+*.db
+*.sqlite3
+*.sqlite3-journal
+local_settings.py
+
+# Virtual Environments
+.venv/
+venv/
+venv.bak/
+env/
+env.bak/
+
+# secrets
+*.json
+token.json
+credentials.json
+onebox_oauth.json
+executive-agent.json
+.env
