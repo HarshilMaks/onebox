@@ -21,10 +21,16 @@ venv.bak/
 env/
 env.bak/
 
+# IDE / Editors
+.vscode/
+.idea/
+.qodo/
+
 # secrets
 *.json
 token.json
 credentials.json
 onebox_oauth.json
 executive-agent.json
+jwt_temp.py
 .env
