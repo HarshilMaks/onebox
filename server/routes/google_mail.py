@@ -4,12 +4,13 @@ from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
 import base64
+import hashlib
 import logging
 from server.logging_config import setup_logging
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from server.services.setup_google import get_current_user_info, get_gmail_service
-from server.redis_cache import cache_get, cache_set
+from server.redis_cache import cache_get, cache_set, invalidate_user_mail_cache
 from email.utils import parsedate_to_datetime
 from datetime import datetime
 import re 
@@ -163,54 +164,83 @@ def parse_message(service: Resource, msg: Dict[str, Any], user_id_for_attachment
         'date': date_iso,
     }
     
-def search_emails(service: Resource, query: str, user_id: str = 'me') -> List[dict]:
+def search_emails(
+    service: Resource,
+    query: str,
+    user_id: str = 'me',
+    max_results: Optional[int] = None,
+) -> List[dict]:
     results = []
     try:
         logger.info(f"Searching emails with query: {query} for user: {user_id}")
-        request = service.users().messages().list(userId=user_id, q=query, maxResults=100) # Consider pagination for search if needed
-        while request:
+        page_size = min(max_results, 100) if max_results is not None else 100
+        request = service.users().messages().list(
+            userId=user_id,
+            q=query,
+            maxResults=page_size,
+        )
+        while request and (max_results is None or len(results) < max_results):
             response = request.execute()
             messages_metadata = response.get('messages', [])
             if not messages_metadata:
                 break
 
+            if max_results is not None:
+                remaining = max_results - len(results)
+                messages_metadata = messages_metadata[:remaining]
+
             batch = service.new_batch_http_request()
-            message_details_temp = {} # Use a temporary dict for batch results
+            message_details_temp = {}
 
             def parse_batch_response(request_id, batch_response, exception):
                 if exception is not None:
-                    logger.error(f"Batch get error for message ID {request_id} for user {user_id}: {exception}")
-                else:
-                    # Using the full parse_message here for search results as well
-                    message_details_temp[batch_response['id']] = parse_message(batch_response)
+                    logger.error(
+                        f"Batch get error for message ID {request_id} for user {user_id}: {exception}"
+                    )
+                    return
+
+                message_details_temp[batch_response['id']] = parse_message(
+                    service,
+                    batch_response,
+                    user_id_for_attachments=user_id,
+                )
 
             for msg_meta in messages_metadata:
-                 batch.add(
-                     service.users().messages().get(userId=user_id, id=msg_meta['id'], format='full'), # Fetch full for search too
-                     callback=parse_batch_response,
-                     request_id=msg_meta['id']
-                 )
+                batch.add(
+                    service.users().messages().get(
+                        userId=user_id,
+                        id=msg_meta['id'],
+                        format='full',
+                    ),
+                    callback=parse_batch_response,
+                    request_id=msg_meta['id'],
+                )
 
-            if messages_metadata:
-                logger.info(f"Executing batch get for {len(messages_metadata)} search result messages for user {user_id}.")
-                batch.execute()
-            
-            # Ensure order is maintained from messages_metadata
+            batch.execute()
+
             for msg_meta in messages_metadata:
                 if msg_meta['id'] in message_details_temp:
                     results.append(message_details_temp[msg_meta['id']])
 
-
+            if max_results is not None and len(results) >= max_results:
+                break
             request = service.users().messages().list_next(request, response)
 
     except HttpError as e:
-        logger.exception(f"Failed during email search with query '{query}' for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API search error: {e.content.decode() if e.content else str(e)}")
+        logger.exception(
+            f"Failed during email search with query '{query}' for user {user_id}: "
+            f"{e.content.decode() if e.content else str(e)}"
+        )
+        raise HTTPException(
+            status_code=e.resp.status,
+            detail=f"Gmail API search error: {e.content.decode() if e.content else str(e)}",
+        )
     except Exception as e:
         logger.exception(f"An unexpected error occurred during search with query '{query}' for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error during search: {e}")
 
     return results
+
 
 # ---------- Endpoints ----------
 @router.get("/emails", response_model=EmailPage)
@@ -332,8 +362,7 @@ async def mark_as_read(
             body={'removeLabelIds': ['UNREAD']}
         ).execute()
         # Invalidate cache for this email and relevant lists
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True) # Simple delete, more sophisticated invalidation might be needed
+        invalidate_user_mail_cache(str(user_id), email_id)
         # Potentially invalidate list caches too, or update the specific item in list caches
         return {"id": email_id, "status": "marked as read"}
     except HttpError as e:
@@ -353,8 +382,7 @@ async def mark_as_unread(
             userId='me', id=email_id,
             body={'addLabelIds': ['UNREAD']}
         ).execute()
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True)
+        invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "marked as unread"}
     except HttpError as e:
         logger.exception(f"Failed to mark email {email_id} as unread for user {user_id}: {e.content.decode() if e.content else str(e)}")
@@ -374,8 +402,7 @@ async def move_to_trash(
     logger.info(f"Moving email to trash: {email_id} for user: {user_id}")
     try:
         service.users().messages().trash(userId='me', id=email_id).execute()
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True) # Invalidate single email cache
+        invalidate_user_mail_cache(str(user_id), email_id)
         # Also consider invalidating/updating list caches from which this email was removed
         return {"id": email_id, "status": "moved to trash"}
     except HttpError as e:
@@ -395,8 +422,7 @@ async def restore_from_trash(
     logger.info(f"Restoring email from trash: {email_id} for user: {user_id}")
     try:
         service.users().messages().untrash(userId='me', id=email_id).execute()
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True) # Invalidate single email cache
+        invalidate_user_mail_cache(str(user_id), email_id)
         # Also consider invalidating/updating list caches to which this email was added
         return {"id": email_id, "status": "restored from trash"}
     except HttpError as e:
@@ -417,9 +443,7 @@ async def delete_email(
     logger.info(f"Permanently deleting email: {email_id} for user: {user_id}")
     try:
         service.users().messages().delete(userId='me', id=email_id).execute()
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True)
-        # Also invalidate from trash list cache
+        invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "permanently deleted"}
     except HttpError as e:
         logger.exception(f"Failed to delete email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
@@ -464,8 +488,7 @@ async def toggle_star(
         service.users().messages().modify(userId='me', id=email_id, body=body_mod).execute()
         new_status = "unstarred" if is_starred else "starred" # This is the old status, after toggle it's reversed
         
-        cache_key_email = f"user:{user_id}:email:{email_id}"
-        cache_get(cache_key_email, delete=True) # Invalidate cache
+        invalidate_user_mail_cache(str(user_id), email_id)
 
         return {"id": email_id, "status": "starred" if not is_starred else "unstarred"} # Return new status
     except HttpError as e:
@@ -497,6 +520,7 @@ async def send_email_api( # Renamed to avoid conflict
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         message = service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        invalidate_user_mail_cache(str(user_id), message.get('id', ''))
         return {"id": message.get('id'), "status": "sent"}
     except HttpError as e:
         logger.exception(f"Failed to send email for user {user_id}: {e.content.decode() if e.content else str(e)}")
@@ -550,17 +574,17 @@ async def search_endpoint(
     logger.info(f"User {user_id} performing search query: '{q}' with limit {limit}")
     
     # Cache key for search results might be complex if q is very dynamic. Consider not caching or short TTL.
-    cache_key = f"user:{user_id}:search:{q[:50]}:{limit}" # Truncate q for key length
+    query_hash = hashlib.sha256(q.encode("utf-8")).hexdigest()
+    cache_key = f"user:{user_id}:search:{query_hash}:{limit}"
     cached_results = cache_get(cache_key)
     if cached_results:
         logger.info(f"Serving cached search results for user {user_id}, query '{q}' (key: {cache_key})")
         return cached_results
 
     try:
-        results = search_emails(service, q, user_id='me') # search_emails already uses parse_message
-        limited_results = results[:limit]
+        limited_results = search_emails(service, q, user_id='me', max_results=limit)
         cache_set(cache_key, limited_results, ttl=60) # Cache search results for 1 minute
-        logger.info(f"Search returned {len(results)} results for user {user_id}, endpoint limit {limit}.")
+        logger.info(f"Search returned {len(limited_results)} results for user {user_id}, endpoint limit {limit}.")
         return limited_results
     except HTTPException: # Re-raise HTTPExceptions from search_emails
         raise
