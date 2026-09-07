@@ -34,9 +34,9 @@ def cache_delete(key: str):
 def invalidate_user_mail_cache(user_id: str, email_id: str) -> None:
     """Remove cached detail, list, and search data affected by a mail mutation."""
     patterns = (
-        f"user:{user_id}:email_v2:{email_id}",
-        f"user:{user_id}:emails_v2:*",
-        f"user:{user_id}:search:*",
+        f"user:{user_id}:email_v*:{email_id}",
+        f"user:{user_id}:emails_v*",
+        f"user:{user_id}:search*",
     )
 
     try:

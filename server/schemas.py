@@ -1,18 +1,32 @@
 # server/schemas.py
-from uuid import UUID
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
+from uuid import UUID
 
-class Email(BaseModel):
+from pydantic import BaseModel, EmailStr, Field
+
+
+class EmailListItem(BaseModel):
+    """Summary data returned by inbox, folder, and search endpoints."""
+
     id: str
-    subject: Optional[str] = None
-    sender: Optional[str] = None
-    to: Optional[List[str]] = None
-    snippet: Optional[str] = None
+    threadId: Optional[str] = None
+    subject: str
+    sender: str
+    to: List[str] = Field(default_factory=list)
+    snippet: str = ""
     is_read: bool
     is_starred: bool
-    labels: List[str]
+    labels: List[str] = Field(default_factory=list)
+    date: Optional[str] = None
+
+
+class EmailDetail(EmailListItem):
+    """Complete data returned when a single email is opened."""
+
+    cc: List[str] = Field(default_factory=list)
+    body: str
+
 
 class EmailDraft(BaseModel):
     to: List[EmailStr]
@@ -20,13 +34,16 @@ class EmailDraft(BaseModel):
     body: str
     draft_id: Optional[str] = None
 
+
 class EmailPage(BaseModel):
-    emails: List[Email]
+    emails: List[EmailListItem]
     next_page_token: Optional[str] = None
+
 
 class OAuthCallback(BaseModel):
     code: str
     state: str | None = None
+
 
 class TokenInfo(BaseModel):
     access_token: str
@@ -35,7 +52,8 @@ class TokenInfo(BaseModel):
     token_type: str
     expires_in: int
 
+
 class AgentTokenOut(BaseModel):
-    user_id:  UUID  # <-- Changed
+    user_id: UUID
     token: TokenInfo
     updated_at: datetime

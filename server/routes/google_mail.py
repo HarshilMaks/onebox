@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from server.schemas import EmailDraft, Email as EmailSchema, EmailPage
+from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
@@ -164,6 +164,22 @@ def parse_message(service: Resource, msg: Dict[str, Any], user_id_for_attachment
         'date': date_iso,
     }
     
+def to_email_list_item(email: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the stable summary contract used by list and search endpoints."""
+    return {
+        "id": email["id"],
+        "threadId": email.get("threadId"),
+        "subject": email.get("subject", "(No Subject)"),
+        "sender": email.get("sender", "Unknown Sender"),
+        "to": email.get("to", []),
+        "snippet": email.get("snippet", ""),
+        "is_read": email.get("is_read", False),
+        "is_starred": email.get("is_starred", False),
+        "labels": email.get("labels", []),
+        "date": email.get("date"),
+    }
+
+
 def search_emails(
     service: Resource,
     query: str,
@@ -255,7 +271,7 @@ async def fetch_emails(
     gmail_user_id_param = 'me' # Use 'me' for Gmail API calls for the authenticated user
     logger.info(f"Fetching emails from folder: {folder} for app user: {user_id} (Gmail user: {gmail_user_id_param}) with limit: {limit}, page_token: {page_token}")
     
-    cache_key = f"user:{user_id}:emails_v2:{folder}:{limit}:{page_token}" # Added _v2 to key for new format
+    cache_key = f"user:{user_id}:emails_v3:{folder}:{limit}:{page_token}"
     cached_data = cache_get(cache_key)
     if cached_data:
         logger.info(f"Serving cached emails for user {user_id} from {folder} (key: {cache_key})")
@@ -279,7 +295,10 @@ async def fetch_emails(
             if page_token:
                 idx = next((i for i, msg in enumerate(all_starred_msgs_parsed) if msg['id'] == page_token), -1)
                 if idx != -1: start_index = idx + 1
-            emails_data = all_starred_msgs_parsed[start_index : start_index + limit]
+            emails_data = [
+                to_email_list_item(email)
+                for email in all_starred_msgs_parsed[start_index : start_index + limit]
+            ]
             if start_index + limit < len(all_starred_msgs_parsed):
                 next_page_token_val = all_starred_msgs_parsed[start_index + limit]['id']
         else:
@@ -302,7 +321,11 @@ async def fetch_emails(
                      batch.add(service.users().messages().get(userId=gmail_user_id_param, id=msg_meta['id'], format='full'),
                                callback=parse_batch_list_response, request_id=msg_meta['id'])
                 batch.execute()
-                emails_data = [message_details_temp[msg_meta['id']] for msg_meta in messages_metadata if msg_meta['id'] in message_details_temp]
+                emails_data = [
+                    to_email_list_item(message_details_temp[msg_meta['id']])
+                    for msg_meta in messages_metadata
+                    if msg_meta['id'] in message_details_temp
+                ]
 
         result = {"emails": emails_data, "next_page_token": next_page_token_val}
         cache_set(cache_key, result, ttl=60)
@@ -316,7 +339,7 @@ async def fetch_emails(
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.get("/emails/{email_id}", response_model=EmailSchema)
+@router.get("/emails/{email_id}", response_model=EmailDetail)
 async def fetch_email_by_id(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -326,7 +349,7 @@ async def fetch_email_by_id(
     gmail_user_id_param = 'me'
     logger.info(f"Fetching email with ID: {email_id} for app user {user_id}")
     
-    cache_key = f"user:{user_id}:email_v2:{email_id}"
+    cache_key = f"user:{user_id}:email_v3:{email_id}"
     cached_email = cache_get(cache_key)
     if cached_email:
         logger.info(f"Serving cached email for ID {email_id}, user {user_id} (key: {cache_key})")
@@ -563,7 +586,7 @@ async def save_draft_api( # Renamed
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.get("/search", response_model=List[EmailSchema]) # Use EmailSchema
+@router.get("/search", response_model=List[EmailListItem])
 async def search_endpoint(
     q: str = Query(..., description="Gmail search query string"),
     limit: int = Query(20, ge=1, description="Max number of results to return"), # Reduced default for search
@@ -575,14 +598,15 @@ async def search_endpoint(
     
     # Cache key for search results might be complex if q is very dynamic. Consider not caching or short TTL.
     query_hash = hashlib.sha256(q.encode("utf-8")).hexdigest()
-    cache_key = f"user:{user_id}:search:{query_hash}:{limit}"
+    cache_key = f"user:{user_id}:search_v2:{query_hash}:{limit}"
     cached_results = cache_get(cache_key)
     if cached_results:
         logger.info(f"Serving cached search results for user {user_id}, query '{q}' (key: {cache_key})")
         return cached_results
 
     try:
-        limited_results = search_emails(service, q, user_id='me', max_results=limit)
+        search_results = search_emails(service, q, user_id='me', max_results=limit)
+        limited_results = [to_email_list_item(email) for email in search_results]
         cache_set(cache_key, limited_results, ttl=60) # Cache search results for 1 minute
         logger.info(f"Search returned {len(limited_results)} results for user {user_id}, endpoint limit {limit}.")
         return limited_results
