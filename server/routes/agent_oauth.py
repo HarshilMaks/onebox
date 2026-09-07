@@ -13,6 +13,7 @@ from server.services.setup_google import get_client_config, _SCOPES, get_current
 from server.database import get_agent_db
 from server.models import AgentToken
 from server.oauth_state import create_oauth_state, consume_oauth_state
+from server.schemas import AgentStatusResponse, OAuthStartResponse, VerifyAndCreateEntryResponse
 from server.logging_config import setup_logging
 from urllib.parse import urlencode # Import urlencode for building redirect URL
 setup_logging()
@@ -31,7 +32,7 @@ class _OAuthAccountMismatch(Exception):
         self.new_email = new_email
 
 
-@router.get("/oauth/start")
+@router.get("/oauth/start", response_model=OAuthStartResponse)
 async def start_oauth(
     user_info: dict = Depends(get_current_user_info),
 ):
@@ -177,7 +178,7 @@ async def oauth_callback(
     
     
 # --- NEW ROUTE TO DEMONSTRATE CREATING A RECORD WITH TOKEN USER ID ---
-@router.post("/verify_and_create_entry")
+@router.post("/verify_and_create_entry", response_model=VerifyAndCreateEntryResponse)
 async def verify_and_create_agent_entry(
     user_info: dict = Depends(get_current_user_info),
     db: AsyncSession = Depends(get_agent_db)
@@ -207,7 +208,7 @@ async def verify_and_create_agent_entry(
     return {"message": "Entry created successfully", "user_id": str(user_id), "email": email}
 
 
-@router.get("/status")
+@router.get("/status", response_model=AgentStatusResponse)
 async def get_agent_status(
     user_info: dict = Depends(get_current_user_info),
     db: AsyncSession = Depends(get_agent_db)

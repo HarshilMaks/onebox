@@ -12,6 +12,7 @@ from server.services.mail import (
     process_email_notification,     # Async
     extract_and_decode_message,     # Synchronous
 )
+from server.schemas import GlobalGmailHealthResponse
 
 # Configure logging
 setup_logging()
@@ -74,7 +75,7 @@ async def receive_gmail_notification(
         logger.exception(f"Error processing /mail/notifications: {e}")
         raise HTTPException(status_code=500, detail="Internal server error processing notification.")
 
-@router.get("/agent/health")
+@router.get("/agent/health", response_model=GlobalGmailHealthResponse)
 async def health_check():
     """
     Health check endpoint. Checks if the global Gmail service instance is initialized.

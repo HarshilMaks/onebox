@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage
+from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
@@ -371,7 +371,7 @@ async def fetch_email_by_id(
 
 # Other endpoints (mark_as_read, unread, trash, etc.) remain largely the same but ensure logging includes user_id if relevant
 # Example for mark_as_read:
-@router.post("/emails/{email_id}/read")
+@router.post("/emails/{email_id}/read", response_model=MailMutationResponse)
 async def mark_as_read(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -392,7 +392,7 @@ async def mark_as_read(
         logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {e.content.decode() if e.content else str(e)}")
         raise HTTPException(status_code=e.resp.status, detail=f"Gmail API modify error: {e.content.decode() if e.content else str(e)}")
 
-@router.post("/emails/{email_id}/unread")
+@router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
 async def mark_as_unread(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -415,7 +415,7 @@ async def mark_as_unread(
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.post("/emails/{email_id}/trash")
+@router.post("/emails/{email_id}/trash", response_model=MailMutationResponse)
 async def move_to_trash(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -435,7 +435,7 @@ async def move_to_trash(
         logger.exception(f"An unexpected error occurred while moving email {email_id} to trash for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-@router.post("/emails/{email_id}/restore")
+@router.post("/emails/{email_id}/restore", response_model=MailMutationResponse)
 async def restore_from_trash(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -456,7 +456,7 @@ async def restore_from_trash(
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.delete("/emails/{email_id}")
+@router.delete("/emails/{email_id}", response_model=MailMutationResponse)
 async def delete_email(
     email_id: str,
     user_info: dict = Depends(get_current_user_info),
@@ -476,7 +476,7 @@ async def delete_email(
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.post("/emails/{email_id}/star")
+@router.post("/emails/{email_id}/star", response_model=MailMutationResponse)
 async def toggle_star(
     email_id: str,
     # star_status: bool, # If you want to set specific status, not just toggle
@@ -521,7 +521,7 @@ async def toggle_star(
         logger.exception(f"An unexpected error occurred while toggling star for email {email_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-@router.post("/send")
+@router.post("/send", response_model=SendEmailResponse)
 async def send_email_api( # Renamed to avoid conflict
     email: EmailDraft,
     user_info: dict = Depends(get_current_user_info),
@@ -553,7 +553,7 @@ async def send_email_api( # Renamed to avoid conflict
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.post("/drafts")
+@router.post("/drafts", response_model=SaveDraftResponse)
 async def save_draft_api( # Renamed
     email: EmailDraft,
     user_info: dict = Depends(get_current_user_info),
@@ -617,12 +617,12 @@ async def search_endpoint(
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 
-@router.get("/health")
+@router.get("/health", response_model=HealthResponse)
 def health_check():
     logger.debug("Health check hit")
     return {"status": "healthy"}
 
-@router.post("/check-inbox")
+@router.post("/check-inbox", response_model=CheckInboxResponse)
 async def check_inbox_api( # Renamed
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)

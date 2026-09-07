@@ -75,3 +75,62 @@ class AgentErrorResponse(BaseModel):
 
     error: str
     detail: str
+
+
+class MailMutationResponse(BaseModel):
+    """Standard response for a single-email mutation (read/unread/trash/
+    restore/delete/star). `action` is only present for the star endpoint,
+    which can report a no-op when the requested state already matches."""
+
+    id: str
+    status: str
+    action: Optional[str] = None
+
+
+class SendEmailResponse(BaseModel):
+    id: Optional[str] = None
+    status: str
+
+
+class SaveDraftResponse(BaseModel):
+    id: str
+    status: str
+    draft_id: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+
+
+class GlobalGmailHealthResponse(BaseModel):
+    status: str
+    detail: str
+    gmail_service_status: str
+
+
+class CheckInboxResponse(BaseModel):
+    status: str
+    inbox_message_count_estimate: int
+
+
+class ReadinessResponse(BaseModel):
+    status: str
+    global_gmail_service: str
+
+
+class OAuthStartResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class AgentStatusResponse(BaseModel):
+    user_id: str
+    email: str
+    is_gmail_connected: bool
+    status: str
+
+
+class VerifyAndCreateEntryResponse(BaseModel):
+    message: str
+    user_id: str
+    email: str

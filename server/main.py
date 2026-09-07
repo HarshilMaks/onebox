@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from server.routes import agent_oauth, google_mail, push_router, agent_router
 # Import services
 from server.services.mail import initialize_gmail_service, stop_gmail_watch, get_gmail_service_instance
+from server.schemas import ReadinessResponse
 from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
@@ -56,7 +57,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+@app.get("/", response_model=ReadinessResponse)
 async def root():
     """Application readiness endpoint.
 
