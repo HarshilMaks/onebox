@@ -6,7 +6,7 @@ from googleapiclient.errors import HttpError # For Google API errors
 
 from server.logging_config import setup_logging
 from server.services.mail import (
-    fetch_and_process_email,        # Synchronous
+    fetch_and_process_email,        # Async
     get_gmail_service_instance,     # Synchronous, returns global GMAIL_SERVICE
     setup_gmail_watch,              # Synchronous
     process_email_notification,     # Async

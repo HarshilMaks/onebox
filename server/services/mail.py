@@ -245,7 +245,7 @@ async def process_email_notification(notification_data: Dict[str, Any], gmail_se
             
         logger.info(f"Processing latest unread message: {latest_message_id}")
         # Pass gmail_service_param
-        response = fetch_and_process_email(gmail_service_param, latest_message_id)
+        response = await fetch_and_process_email(gmail_service_param, latest_message_id)
         
         LAST_PROCESSED_MESSAGE_ID = latest_message_id
         LAST_PROCESSED_TIME = time.time()
@@ -254,7 +254,7 @@ async def process_email_notification(notification_data: Dict[str, Any], gmail_se
     except Exception as e:
         logger.exception(f"Error processing email notification: {e}")
 
-def fetch_and_process_email(gmail_service_param, message_id: str): # Pass service explicitly
+async def fetch_and_process_email(gmail_service_param, message_id: str): # Pass service explicitly
     """Fetch a specific email and process it."""
     try:
         logger.info(f"Fetching email ID: {message_id}")
@@ -274,7 +274,7 @@ def fetch_and_process_email(gmail_service_param, message_id: str): # Pass servic
         logger.info(f"Email body preview (len {body_length}): {preview}")
         
         logger.info("Handing off email to AI agent...")
-        response = handle_email_with_ai_agent(email_content)
+        response = await handle_email_with_ai_agent(email_content, gmail_service_param=gmail_service_param)
         
         if response: logger.info("AI agent processed email and generated response.")
         else: logger.warning("AI agent processing completed; no response generated.")
@@ -358,24 +358,33 @@ def get_email_body(payload: Dict[str, Any]) -> str:
     logger.debug("No text content found in this part or its children")
     return ""
 
-def handle_email_with_ai_agent(email_content: dict):
-    """Process the email directly with the ExecutiveAgent."""
-    # ... (no changes needed in this function's logic, assuming ExecutiveAgent is synchronous)
+async def handle_email_with_ai_agent(email_content: dict, gmail_service_param=None):
+    """Process the email with the ExecutiveAgent for the globally configured service account."""
     logger.info("Started handling email with AI agent (ExecutiveAgent)...")
     if not email_content or 'id' not in email_content:
         logger.error("Invalid email content received by handle_email_with_ai_agent.")
+        return None
+
+    if not AGENT_USER_ID_FOR_SERVICE:
+        logger.error(
+            "Cannot run ExecutiveAgent: AGENT_USER_ID_FOR_SERVICE is not set. "
+            "This automated path requires the same user_id used to initialize the global Gmail service."
+        )
         return None
 
     message_id = email_content['id']
     logger.info(f"Processing email ID: {message_id} using ExecutiveAgent.")
 
     try:
-        executive_agent = ExecutiveAgent()
+        executive_agent = ExecutiveAgent(user_id=AGENT_USER_ID_FOR_SERVICE)
         agent_input = json.dumps(email_content, indent=2)
         logger.debug(f"Input for Executive Agent (Email Content JSON truncated):\n{agent_input[:500]}...")
 
         logger.info(f"Calling ExecutiveAgent for email {message_id}...")
-        agent_response_text = executive_agent.run(input_query=agent_input)
+        agent_response_text = await executive_agent.run(
+            input_query=agent_input,
+            gmail_service=gmail_service_param,
+        )
         logger.info(f"ExecutiveAgent finished processing for email {message_id}.")
         logger.info(f"Executive Agent Final Response Text: {agent_response_text}")
         return agent_response_text

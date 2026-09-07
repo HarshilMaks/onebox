@@ -20,10 +20,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Initialize and clean up resources using FastAPI lifespan events."""
     # Startup logic
-    # Run Redis setup shell script
     logger.info("Starting Gmail AI Agent service...")
-    initialize_gmail_service()
-    logger.info("Gmail AI Agent service started")
+    initialized = await initialize_gmail_service()
+    if initialized:
+        logger.info("Gmail AI Agent service started")
+    else:
+        logger.warning(
+            "Gmail AI Agent service did not start (global Gmail service unavailable). "
+            "Push/automated mail endpoints will report unavailable until this is resolved."
+        )
     
     # Yield control to application
     yield
