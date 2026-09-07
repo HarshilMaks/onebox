@@ -57,3 +57,21 @@ class AgentTokenOut(BaseModel):
     user_id: UUID
     token: TokenInfo
     updated_at: datetime
+
+
+class AgentSuccessResponse(BaseModel):
+    """Standard envelope for a successful non-streaming agent response."""
+
+    result: str
+
+
+class AgentErrorResponse(BaseModel):
+    """Standard envelope for a failed agent request.
+
+    `error` is a short, stable machine-readable code; `detail` is a
+    human-readable message safe to show to a client. Internal exception
+    text is never placed directly in `detail`.
+    """
+
+    error: str
+    detail: str

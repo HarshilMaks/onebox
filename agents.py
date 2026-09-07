@@ -458,7 +458,10 @@ class GeneralAgent(Agent):
             return final_text if final_text is not None else str(response)
         except Exception as e:
             logger.error(f"[GeneralAgent Error] User {self.user_id}: {e}", exc_info=True)
-            return f"Error: {e}"
+            # Re-raise rather than returning an "Error: ..." string as if it
+            # were a successful result. The caller (route) is responsible for
+            # mapping this to a proper error response.
+            raise
 
 class GeneralAgentStreamer(Agent):
     def __init__(self, user_id: str, model_name: str = "gemini-2.0-flash-lite"):
@@ -493,7 +496,14 @@ class GeneralAgentStreamer(Agent):
         tasks_service: Optional[Resource] = None,
         current_user_email: Optional[str] = None,
         system_prompt: str = GENERAL_AGENT_PROMPT
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[tuple[str, str], None]:
+        """Yields (event_type, content) pairs.
+
+        event_type is one of:
+          - "token": a chunk of model-generated text
+          - "tool_result": text generated after a tool call completed
+          - "error": a user-safe error message; the stream ends after this
+        """
         logger.debug(f"GeneralAgentStreamer user: {self.user_id}, model: {self.model_name}, query: {input_query[:50]}")
         
         tool_objects_for_api = self._prepare_tool_objects_and_python_callables(
@@ -537,7 +547,7 @@ class GeneralAgentStreamer(Agent):
                 if not active_function_call_name and not full_function_call_parts: # Only yield text if no function call parts are being accumulated
                     chunk_text = getattr(chunk, 'text', None)
                     if chunk_text:
-                        yield chunk_text
+                        yield "token", chunk_text
                 
                 await asyncio.sleep(0)
 
@@ -583,12 +593,12 @@ class GeneralAgentStreamer(Agent):
                         for final_chunk in final_stream_iterator:
                             final_chunk_text = getattr(final_chunk, 'text', None)
                             if final_chunk_text:
-                                yield final_chunk_text
+                                yield "tool_result", final_chunk_text
                             await asyncio.sleep(0)
                     except Exception as e_fc:
-                        yield f"[Error executing tool {final_fc_name}: {e_fc}]"
+                        yield "error", f"Couldn't execute tool '{final_fc_name}': {e_fc}"
                 else:
-                    yield f"[Error: Unknown function {final_fc_name} called after stream]"
+                    yield "error", f"Unknown function '{final_fc_name}' was requested after streaming."
         except Exception as e:
             logger.error(f"[GeneralAgentStreamer Error] User {self.user_id}: {e}", exc_info=True)
-            yield f"[Error]: {e}"
+            yield "error", str(e)
