@@ -40,13 +40,19 @@ def load_config(config_path: str = "user_config.yaml") -> Dict[str, Any]:
 # --- Function Declarations (MUST be accurate and complete for the LLM to use tools correctly) ---
 send_email_func_decl = FunctionDeclaration(
     name="send_email",
-    description="Sends a new email directly. Use when explicitly told to send, not just draft.",
+    description=(
+        "Sends a new email directly. Use when explicitly told to send, not just draft. "
+        "The first call must omit `confirmed` (or set it to false); this returns a "
+        "confirmation_required result describing the action. Only call again with "
+        "`confirmed=true` after the user has explicitly approved sending."
+    ),
     parameters=Schema(
         type=Type.OBJECT,
         properties={
             "recipient_email": Schema(type=Type.STRING, description="The email address of the recipient."),
             "subject": Schema(type=Type.STRING, description="The subject of the email."),
             "email_body": Schema(type=Type.STRING, description="The body content of the email."),
+            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved sending this exact email."),
         },
         required=["recipient_email", "subject", "email_body"],
     ),
@@ -68,7 +74,12 @@ create_draft_func_decl = FunctionDeclaration(
 
 create_event_func_decl = FunctionDeclaration(
     name="create_event",
-    description="Creates a Google Calendar event for scheduling meetings, appointments, or reminders.",
+    description=(
+        "Creates a Google Calendar event for scheduling meetings, appointments, or reminders. "
+        "The first call must omit `confirmed` (or set it to false); this returns a "
+        "confirmation_required result describing the event. Only call again with "
+        "`confirmed=true` after the user has explicitly approved creating it, especially if attendees are invited."
+    ),
     parameters=Schema(
         type=Type.OBJECT,
         properties={
@@ -83,6 +94,7 @@ create_event_func_decl = FunctionDeclaration(
                 items=Schema(type=Type.STRING),
                 description="A list of email addresses of attendees to invite. Optional."
             ),
+            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved creating this exact event."),
         },
         required=["title", "start_time_iso", "end_time_iso", "event_timezone"],
     ),
@@ -123,13 +135,19 @@ mark_as_unread_func_decl = FunctionDeclaration( # Keep if you might need it, eve
 
 send_reply_to_user_func_decl = FunctionDeclaration(
     name="send_reply_to_user",
-    description="Sends a reply directly to an existing email thread. Use when explicitly told to reply directly, not draft.",
+    description=(
+        "Sends a reply directly to an existing email thread. Use when explicitly told to reply directly, not draft. "
+        "The first call must omit `confirmed` (or set it to false); this returns a "
+        "confirmation_required result describing the reply. Only call again with "
+        "`confirmed=true` after the user has explicitly approved sending."
+    ),
     parameters=Schema(
         type=Type.OBJECT,
         properties={
             "recipient_email": Schema(type=Type.STRING, description="The email address of the original sender to whom the reply should be sent."),
             "subject_filter": Schema(type=Type.STRING, description="A keyword or phrase to find in the subject of the email to reply to."),
             "reply_message": Schema(type=Type.STRING, description="The content of the reply message."),
+            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved sending this exact reply."),
         },
         required=["recipient_email", "subject_filter", "reply_message"],
     ),
@@ -323,7 +341,14 @@ class ExecutiveAgent(Agent):
                             
                             # --- Start of POST-TOOL EXECUTION: Generate human-readable response ---
                             final_response_message = ""
-                            if function_name == "create_event":
+                            if isinstance(api_response, dict) and api_response.get("status") == "confirmation_required":
+                                # The tool did not perform its side effect; it is
+                                # waiting for the user to explicitly approve the
+                                # exact action described in `summary` before the
+                                # model calls this tool again with confirmed=true.
+                                summary = api_response.get("summary", "this action")
+                                final_response_message = f"⏸ Please confirm before I proceed: {summary}"
+                            elif function_name == "create_event":
                                 if api_response: # Assuming create_event returns True on success
                                     event_title = args.get('title', 'an event')
                                     start_time_iso = args.get('start_time_iso')
@@ -355,7 +380,9 @@ class ExecutiveAgent(Agent):
                                 else:
                                     final_response_message = f"❌ Couldn't mark the message as read."
                             elif function_name == "send_email" or function_name == "send_reply_to_user":
-                                if api_response:
+                                if isinstance(api_response, dict) and api_response.get("status") == "duplicate_suppressed":
+                                    final_response_message = "✓ Email already sent (duplicate request ignored)."
+                                elif api_response:
                                     final_response_message = f"✓ Email sent successfully."
                                 else:
                                     final_response_message = f"❌ Couldn't send the email."

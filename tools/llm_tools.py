@@ -7,6 +7,7 @@ from functools import partial
 
 from tools.email.send_gmail import send_new_email, reply_to_latest_email, create_gmail_draft
 from tools.tasks.tasks_tool import get_or_create_task_list, insert_task
+from tools.idempotency import acquire_idempotency_lock, make_idempotency_key
 from datetime import datetime, time # Keep datetime and time for type hints or other uses if needed
 import time # <--- ADDED: Import the 'time' module for time.time()
 import pytz
@@ -27,8 +28,17 @@ def create_event(
     event_timezone: str,
     description: str = "",
     location: str = "",
-    attendee_emails: Optional[List[str]]=None
-) -> bool:
+    attendee_emails: Optional[List[str]]=None,
+    confirmed: bool = False,
+):
+    """Creates a Google Calendar event.
+
+    Because this can notify external attendees, it requires `confirmed=True`
+    to actually perform the side effect. When `confirmed` is False (the
+    default), no calendar event is created; the caller receives a
+    structured result indicating confirmation is required, along with the
+    exact arguments to resubmit once the user has approved the action.
+    """
     logger.info(f"Tool: Creating event '{title}' from {start_time_iso} to {end_time_iso}")
     if not calendar_service:
         logger.error("Calendar service not provided for create_event.")
@@ -37,11 +47,32 @@ def create_event(
     if attendee_emails is None:
         attendee_emails = []
 
-    # Use time.time() from the 'time' module to get a unique timestamp
-    # The original error "type object 'datetime.time' has no attribute 'time'" occurred because
-    # 'time' in the original import `from datetime import datetime, time` referred to the
-    # `datetime.time` class, not the `time` module.
-    unique_request_id = f"{title}-{start_time_iso}-{int(time.time())}" 
+    if not confirmed:
+        logger.info(f"create_event for '{title}' requires confirmation before proceeding.")
+        return {
+            "status": "confirmation_required",
+            "action": "create_event",
+            "summary": f"Create event '{title}' from {start_time_iso} to {end_time_iso}"
+                       + (f" with attendees {attendee_emails}" if attendee_emails else ""),
+        }
+
+    idempotency_key = make_idempotency_key(
+        "create_event",
+        title=title,
+        start_time_iso=start_time_iso,
+        end_time_iso=end_time_iso,
+        attendee_emails=sorted(attendee_emails),
+    )
+    if not acquire_idempotency_lock(idempotency_key):
+        logger.warning(f"Duplicate create_event call detected for '{title}'; skipping repeat side effect.")
+        return True
+
+    # This request ID is derived only from stable event fields (not the
+    # current timestamp), so retrying the exact same event produces the
+    # same request ID. Google's conferenceData.createRequest.requestId is
+    # itself idempotent: a repeated identical requestId reuses the
+    # existing conference rather than creating a new one.
+    unique_request_id = f"{title}-{start_time_iso}-{end_time_iso}"
 
     event_body = {
         'summary': title,
@@ -53,7 +84,7 @@ def create_event(
         'reminders': {'useDefault': True},
         'conferenceData': {
             'createRequest': {
-                'requestId': unique_request_id, # <--- FIXED: Used the correctly imported 'time' module
+                'requestId': unique_request_id,
                 'conferenceSolutionKey': { 'type': 'hangoutsMeet' }
             }
         }
@@ -107,8 +138,15 @@ def send_email(
     current_user_email: str,
     recipient_email: str,
     subject: str,
-    email_body: str
+    email_body: str,
+    confirmed: bool = False,
 ):
+    """Sends a new email directly.
+
+    Requires `confirmed=True` to actually send. When `confirmed` is
+    False (the default), no email is sent; a structured result is
+    returned indicating confirmation is required.
+    """
     logger.info(f"Tool: Sending email from {current_user_email} to {recipient_email}, Subject: '{subject}'")
     if not gmail_service:
         logger.error("Gmail service not provided for send_email.")
@@ -116,6 +154,26 @@ def send_email(
     if not current_user_email:
         logger.error("Current user email not provided for send_email.")
         return None
+
+    if not confirmed:
+        logger.info(f"send_email to {recipient_email} requires confirmation before proceeding.")
+        return {
+            "status": "confirmation_required",
+            "action": "send_email",
+            "summary": f"Send email to {recipient_email} with subject '{subject}'",
+        }
+
+    idempotency_key = make_idempotency_key(
+        "send_email",
+        sender=current_user_email,
+        recipient=recipient_email,
+        subject=subject,
+        body=email_body,
+    )
+    if not acquire_idempotency_lock(idempotency_key):
+        logger.warning(f"Duplicate send_email call detected for {recipient_email}; skipping repeat send.")
+        return {"id": None, "status": "duplicate_suppressed"}
+
     try:
         sent_message = send_new_email(
             gmail_service=gmail_service, sender_email=current_user_email,
@@ -138,8 +196,15 @@ def send_reply_to_user(
     current_user_email: str,
     recipient_email: str, # This is the original sender to reply to
     subject_filter: str,
-    reply_message: str
+    reply_message: str,
+    confirmed: bool = False,
 ):
+    """Sends a reply directly to an existing email thread.
+
+    Requires `confirmed=True` to actually send. When `confirmed` is
+    False (the default), no reply is sent; a structured result is
+    returned indicating confirmation is required.
+    """
     logger.info(f"Tool: Replying from {current_user_email} to {recipient_email} with subject filter '{subject_filter}'")
     if not gmail_service:
         logger.error("Gmail service not provided for send_reply_to_user.")
@@ -147,6 +212,26 @@ def send_reply_to_user(
     if not current_user_email:
         logger.error("Current user email not provided for send_reply_to_user.")
         return None
+
+    if not confirmed:
+        logger.info(f"send_reply_to_user to {recipient_email} requires confirmation before proceeding.")
+        return {
+            "status": "confirmation_required",
+            "action": "send_reply_to_user",
+            "summary": f"Reply to {recipient_email} (subject matching '{subject_filter}')",
+        }
+
+    idempotency_key = make_idempotency_key(
+        "send_reply_to_user",
+        sender=current_user_email,
+        recipient=recipient_email,
+        subject_filter=subject_filter,
+        reply_message=reply_message,
+    )
+    if not acquire_idempotency_lock(idempotency_key):
+        logger.warning(f"Duplicate send_reply_to_user call detected for {recipient_email}; skipping repeat send.")
+        return {"id": None, "status": "duplicate_suppressed"}
+
     try:
         sent_reply = reply_to_latest_email(
             gmail_service=gmail_service, target_sender_email=recipient_email,
