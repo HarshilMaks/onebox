@@ -41,10 +41,9 @@ def load_config(config_path: str = "user_config.yaml") -> Dict[str, Any]:
 send_email_func_decl = FunctionDeclaration(
     name="send_email",
     description=(
-        "Sends a new email directly. Use when explicitly told to send, not just draft. "
-        "The first call must omit `confirmed` (or set it to false); this returns a "
-        "confirmation_required result describing the action. Only call again with "
-        "`confirmed=true` after the user has explicitly approved sending."
+        "Prepares an email send action for the authenticated user to review. "
+        "This tool never sends email. It returns an action ID which the user must "
+        "approve through the separate approval API before the server sends it."
     ),
     parameters=Schema(
         type=Type.OBJECT,
@@ -52,7 +51,6 @@ send_email_func_decl = FunctionDeclaration(
             "recipient_email": Schema(type=Type.STRING, description="The email address of the recipient."),
             "subject": Schema(type=Type.STRING, description="The subject of the email."),
             "email_body": Schema(type=Type.STRING, description="The body content of the email."),
-            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved sending this exact email."),
         },
         required=["recipient_email", "subject", "email_body"],
     ),
@@ -75,10 +73,9 @@ create_draft_func_decl = FunctionDeclaration(
 create_event_func_decl = FunctionDeclaration(
     name="create_event",
     description=(
-        "Creates a Google Calendar event for scheduling meetings, appointments, or reminders. "
-        "The first call must omit `confirmed` (or set it to false); this returns a "
-        "confirmation_required result describing the event. Only call again with "
-        "`confirmed=true` after the user has explicitly approved creating it, especially if attendees are invited."
+        "Prepares a calendar event action for the authenticated user to review. "
+        "This tool never creates an event. It returns an action ID which the user must "
+        "approve through the separate approval API before the server creates it."
     ),
     parameters=Schema(
         type=Type.OBJECT,
@@ -94,7 +91,6 @@ create_event_func_decl = FunctionDeclaration(
                 items=Schema(type=Type.STRING),
                 description="A list of email addresses of attendees to invite. Optional."
             ),
-            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved creating this exact event."),
         },
         required=["title", "start_time_iso", "end_time_iso", "event_timezone"],
     ),
@@ -102,7 +98,10 @@ create_event_func_decl = FunctionDeclaration(
 
 create_task_func_decl = FunctionDeclaration(
     name="create_task",
-    description="Creates a Google Task. For event reminders, use 'Attend: [Event Title]'.",
+    description=(
+        "Prepares a Google Task action for the authenticated user to review. "
+        "This tool never creates a task; the user must approve the returned action ID."
+    ),
     parameters=Schema(
         type=Type.OBJECT,
         properties={
@@ -136,10 +135,9 @@ mark_as_unread_func_decl = FunctionDeclaration( # Keep if you might need it, eve
 send_reply_to_user_func_decl = FunctionDeclaration(
     name="send_reply_to_user",
     description=(
-        "Sends a reply directly to an existing email thread. Use when explicitly told to reply directly, not draft. "
-        "The first call must omit `confirmed` (or set it to false); this returns a "
-        "confirmation_required result describing the reply. Only call again with "
-        "`confirmed=true` after the user has explicitly approved sending."
+        "Prepares a reply action for the authenticated user to review. "
+        "This tool resolves the target message but never sends a reply. The user must "
+        "approve the returned action ID through the separate approval API."
     ),
     parameters=Schema(
         type=Type.OBJECT,
@@ -147,7 +145,6 @@ send_reply_to_user_func_decl = FunctionDeclaration(
             "recipient_email": Schema(type=Type.STRING, description="The email address of the original sender to whom the reply should be sent."),
             "subject_filter": Schema(type=Type.STRING, description="A keyword or phrase to find in the subject of the email to reply to."),
             "reply_message": Schema(type=Type.STRING, description="The content of the reply message."),
-            "confirmed": Schema(type=Type.BOOLEAN, description="Set to true only after the user has explicitly approved sending this exact reply."),
         },
         required=["recipient_email", "subject_filter", "reply_message"],
     ),
@@ -200,21 +197,26 @@ class ExecutiveAgent(Agent):
             self.available_python_tools["create_draft"] = partial(create_draft, gmail_service, current_user_email)
             function_declarations_for_tool_config.append(create_draft_func_decl)
             
-            self.available_python_tools["send_email"] = partial(send_email, gmail_service, current_user_email)
+            self.available_python_tools["send_email"] = partial(send_email, self.user_id, current_user_email)
             function_declarations_for_tool_config.append(send_email_func_decl)
             
-            self.available_python_tools["send_reply_to_user"] = partial(send_reply_to_user, gmail_service, current_user_email)
+            self.available_python_tools["send_reply_to_user"] = partial(
+                send_reply_to_user,
+                gmail_service,
+                self.user_id,
+                current_user_email,
+            )
             function_declarations_for_tool_config.append(send_reply_to_user_func_decl)
 
         if calendar_service:
-            self.available_python_tools["create_event"] = partial(create_event, calendar_service)
+            self.available_python_tools["create_event"] = partial(create_event, self.user_id)
             function_declarations_for_tool_config.append(create_event_func_decl)
             
             self.available_python_tools["get_calendar_events"] = partial(get_calendar_events, calendar_service)
             function_declarations_for_tool_config.append(get_calendar_events_func_decl)
         
         if tasks_service:
-            self.available_python_tools["create_task"] = partial(create_task, tasks_service)
+            self.available_python_tools["create_task"] = partial(create_task, self.user_id)
             function_declarations_for_tool_config.append(create_task_func_decl)
 
         if not function_declarations_for_tool_config:
@@ -341,14 +343,15 @@ class ExecutiveAgent(Agent):
                             
                             # --- Start of POST-TOOL EXECUTION: Generate human-readable response ---
                             final_response_message = ""
-                            if isinstance(api_response, dict) and api_response.get("status") == "confirmation_required":
-                                # The tool did not perform its side effect; it is
-                                # waiting for the user to explicitly approve the
-                                # exact action described in `summary` before the
-                                # model calls this tool again with confirmed=true.
+                            if isinstance(api_response, dict) and api_response.get("status") == "pending_approval":
                                 summary = api_response.get("summary", "this action")
-                                final_response_message = f"⏸ Please confirm before I proceed: {summary}"
-                            elif function_name == "create_event":
+                                action_id = api_response.get("action_id")
+                                return f"⏸ Approval required: {summary}. Approve action {action_id} to continue."
+                            if isinstance(api_response, dict) and api_response.get("action_id"):
+                                action_id = api_response["action_id"]
+                                action_status = api_response.get("status", "unknown")
+                                return f"Action {action_id} is already {action_status}; no new external action was executed."
+                            if function_name == "create_event":
                                 if api_response: # Assuming create_event returns True on success
                                     event_title = args.get('title', 'an event')
                                     start_time_iso = args.get('start_time_iso')
@@ -358,7 +361,7 @@ class ExecutiveAgent(Agent):
                                         display_date_time = start_dt.strftime('%d-%m-%Y %H:%M')
                                     except ValueError:
                                         display_date_time = start_time_iso # Fallback if parsing fails
-                                    final_response_message = f"✓ Scheduled '{event_title}' for {display_date_time} and added reminder task."
+                                    final_response_message = f"✓ Scheduled '{event_title}' for {display_date_time}."
                                 else:
                                     final_response_message = "❌ Couldn't schedule the event. There was an issue with the calendar service."
                             elif function_name == "create_task":
@@ -380,9 +383,7 @@ class ExecutiveAgent(Agent):
                                 else:
                                     final_response_message = f"❌ Couldn't mark the message as read."
                             elif function_name == "send_email" or function_name == "send_reply_to_user":
-                                if isinstance(api_response, dict) and api_response.get("status") == "duplicate_suppressed":
-                                    final_response_message = "✓ Email already sent (duplicate request ignored)."
-                                elif api_response:
+                                if api_response:
                                     final_response_message = f"✓ Email sent successfully."
                                 else:
                                     final_response_message = f"❌ Couldn't send the email."
@@ -506,10 +507,10 @@ class GeneralAgentStreamer(Agent):
         function_declarations_for_tool_config = []
         
         if gmail_service and current_user_email:
-            self.available_python_tools["send_email"] = partial(send_email, gmail_service, current_user_email)
+            self.available_python_tools["send_email"] = partial(send_email, self.user_id, current_user_email)
             function_declarations_for_tool_config.append(send_email_func_decl)
         if tasks_service:
-            self.available_python_tools["create_task"] = partial(create_task, tasks_service)
+            self.available_python_tools["create_task"] = partial(create_task, self.user_id)
             function_declarations_for_tool_config.append(create_task_func_decl)
         
         if not function_declarations_for_tool_config:

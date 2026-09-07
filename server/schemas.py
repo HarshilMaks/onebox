@@ -134,3 +134,20 @@ class VerifyAndCreateEntryResponse(BaseModel):
     message: str
     user_id: str
     email: str
+
+
+class PendingActionResponse(BaseModel):
+    """Immutable, owner-bound external action awaiting or reflecting approval."""
+
+    id: UUID
+    action_type: str
+    payload: dict
+    payload_hash: str
+    summary: str
+    status: str
+    result: Optional[dict] = None
+    error_code: Optional[str] = None
+    created_at: datetime
+    expires_at: datetime
+    approved_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None

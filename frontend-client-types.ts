@@ -137,6 +137,26 @@ export interface AgentStreamEvent {
   content: string;
 }
 
+/** Immutable action prepared by an agent. Only its JWT owner may approve or reject it. */
+export interface PendingActionResponse {
+  id: string;
+  action_type: "send_email" | "send_reply" | "create_event" | "create_task";
+  payload: Record<string, unknown>;
+  payload_hash: string;
+  summary: string;
+  status: "pending" | "processing" | "succeeded" | "failed" | "rejected" | "expired";
+  result: Record<string, unknown> | null;
+  error_code: string | null;
+  created_at: string;
+  expires_at: string;
+  approved_at: string | null;
+  processed_at: string | null;
+}
+
+export interface PendingActionPathParams {
+  action_id: string;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth / agent connection schemas
 // ---------------------------------------------------------------------------
@@ -198,6 +218,9 @@ export const ONEBOX_API_ENDPOINTS = {
   invokeExecutiveAgent: { method: "POST", path: "/executive/", auth: "jwt" } as const,
   invokeGeneralAgent: { method: "POST", path: "/generate-content/", auth: "jwt" } as const,
   streamGeneralAgent: { method: "POST", path: "/generate-stream/", auth: "jwt" } as const,
+  getPendingAction: { method: "GET", path: "/actions/{action_id}", auth: "jwt" } as const,
+  approvePendingAction: { method: "POST", path: "/actions/{action_id}/approve", auth: "jwt" } as const,
+  rejectPendingAction: { method: "POST", path: "/actions/{action_id}/reject", auth: "jwt" } as const,
 
   // -- Per-user Gmail --
   listEmails: { method: "GET", path: "/mail/emails", auth: "jwt" } as const,
@@ -235,6 +258,9 @@ export interface OneboxApiResponse {
   invokeExecutiveAgent: AgentSuccessResponse;
   invokeGeneralAgent: AgentSuccessResponse;
   streamGeneralAgent: AgentStreamEvent; // one event per SSE frame, not a single response body
+  getPendingAction: PendingActionResponse;
+  approvePendingAction: PendingActionResponse;
+  rejectPendingAction: PendingActionResponse;
   listEmails: EmailPage;
   getEmail: EmailDetail;
   markEmailRead: MailMutationResponse;
