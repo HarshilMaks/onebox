@@ -53,8 +53,20 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {"status": "active"}
+    """Application readiness endpoint.
+
+    Reports whether the process is up and whether the globally
+    initialized Gmail service (used for Pub/Sub push processing) is
+    available. This does not indicate per-user Gmail connectivity,
+    which is checked per-request via each user's stored OAuth token.
+    """
+    gmail_service = get_gmail_service_instance()
+    global_gmail_ready = gmail_service is not None
+
+    return {
+        "status": "ok",
+        "global_gmail_service": "ready" if global_gmail_ready else "unavailable",
+    }
 
 # Include routers
 app.include_router(google_mail.router)

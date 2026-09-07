@@ -74,7 +74,7 @@ async def receive_gmail_notification(
         logger.exception(f"Error processing /mail/notifications: {e}")
         raise HTTPException(status_code=500, detail="Internal server error processing notification.")
 
-@router.get("/health")
+@router.get("/agent/health")
 async def health_check():
     """
     Health check endpoint. Checks if the global Gmail service instance is initialized.
@@ -118,7 +118,7 @@ async def renew_watch(
         logger.exception(f"Unexpected error renewing Gmail watch: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred while renewing watch: {str(e)}")
     
-@router.post("/check-inbox")
+@router.post("/agent/check-inbox")
 async def check_inbox(
     background_tasks: BackgroundTasks, 
     gmail_service = Depends(get_active_gmail_service) # Use the robust dependency
