@@ -12,12 +12,23 @@ from server.config import settings
 from server.services.setup_google import get_client_config, _SCOPES, get_current_user_info
 from server.database import get_agent_db
 from server.models import AgentToken
+from server.oauth_state import create_oauth_state, consume_oauth_state
 from server.logging_config import setup_logging
 from urllib.parse import urlencode # Import urlencode for building redirect URL
 setup_logging()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["Agent auth"])
+
+
+class _OAuthAccountMismatch(Exception):
+    """Raised when the Google account returned by OAuth doesn't match
+    the account already connected for this user."""
+
+    def __init__(self, existing_email: str, new_email: str):
+        super().__init__(f"{existing_email} != {new_email}")
+        self.existing_email = existing_email
+        self.new_email = new_email
 
 
 @router.get("/oauth/start")
@@ -30,7 +41,12 @@ async def start_oauth(
 
     logger.info(f"Initiating Google OAuth flow for user_id: {user_id} (email: {email})")
 
-    state = str(user_id)
+    # `state` is a random, single-use token bound server-side to this
+    # user_id (see server/oauth_state.py). It must NOT be derived from
+    # user_id directly, since the callback is public and a predictable
+    # state would let an attacker bind their own Google account to a
+    # different user's row.
+    state = create_oauth_state(str(user_id))
     final_redirect_uri = str(settings.OAUTH_REDIRECT_URI)
 
     flow = Flow.from_client_config(
@@ -44,7 +60,7 @@ async def start_oauth(
         include_granted_scopes="true",
         state=state,
         prompt="consent",
-        login_hint=email  # <- This enforces the email hint!
+        login_hint=email  # Hints the account in Google's UI; not an identity guarantee.
     )
 
     return {"authorization_url": auth_url, "state": state}
@@ -63,10 +79,21 @@ async def oauth_callback(
     """
     logger.info(f"Received callback with code: {code[:5]}... state: {state}, scope: {scope}")
 
+    # Resolve the authenticated user_id from the one-time state token
+    # created in /oauth/start. This callback has no JWT of its own, so
+    # the state token is the only trustworthy link back to who started
+    # the flow. A missing/expired/reused state is rejected outright.
+    state_user_id = consume_oauth_state(state)
+    if state_user_id is None:
+        logger.error(f"OAuth state not found, expired, or already used: {state}")
+        error_params = {"status": "failure", "error_message": "Invalid or expired OAuth state"}
+        redirect_url = f"{settings.FRONTEND_OAUTH_CALLBACK_URI}?{urlencode(error_params)}"
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+
     try:
-        user_id = UUID(state)
+        user_id = UUID(state_user_id)
     except ValueError:
-        logger.error(f"Invalid state parameter received from Google: {state}")
+        logger.error(f"Stored OAuth state resolved to an invalid user_id: {state_user_id}")
         error_params = {"status": "failure", "error_message": "Invalid state parameter"}
         redirect_url = f"{settings.FRONTEND_OAUTH_CALLBACK_URI}?{urlencode(error_params)}"
         return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
@@ -84,7 +111,7 @@ async def oauth_callback(
         creds = flow.credentials
         token_dict = json.loads(creds.to_json())
 
-        # ---- NEW: Fetch user info (especially email) from Google ----
+        # ---- Fetch user info (especially email) from Google ----
         from googleapiclient.discovery import build
         userinfo_service = build('oauth2', 'v2', credentials=creds)
         userinfo = userinfo_service.userinfo().get().execute()
@@ -96,24 +123,44 @@ async def oauth_callback(
         logger.info(f"Fetched user_email from Google: {user_email}")
 
         # ---- Save or Update database ----
-        async with db.begin():
-            existing = await db.get(AgentToken, user_id)
-            if existing:
-                logger.info(f"Updating existing AgentToken for user_id: {user_id}")
-                existing.token_json = token_dict
-                existing.user_email = user_email  # <-- Update email
-                if creds.refresh_token:
-                    token_dict['refresh_token'] = creds.refresh_token
+        try:
+            async with db.begin():
+                existing = await db.get(AgentToken, user_id)
+
+                # Account-ownership check: if this user already has a
+                # connected Google account, the account returned by this
+                # OAuth flow must match it. This stops a user (or an
+                # attacker who obtained a valid state) from silently
+                # re-pointing an existing row at a different Google account.
+                if existing and existing.user_email and existing.user_email != user_email:
+                    raise _OAuthAccountMismatch(existing.user_email, user_email)
+
+                if existing:
+                    logger.info(f"Updating existing AgentToken for user_id: {user_id}")
                     existing.token_json = token_dict
-            else:
-                logger.info(f"Creating new AgentToken for user_id: {user_id}")
-                new_token = AgentToken(
-                    user_id=user_id,
-                    user_email=user_email,  # <-- Save email
-                    token_json=token_dict
-                )
-                db.add(new_token)
-            await db.commit()  # <-- this is the fix!
+                    existing.user_email = user_email  # <-- Update email
+                    if creds.refresh_token:
+                        token_dict['refresh_token'] = creds.refresh_token
+                        existing.token_json = token_dict
+                else:
+                    logger.info(f"Creating new AgentToken for user_id: {user_id}")
+                    new_token = AgentToken(
+                        user_id=user_id,
+                        user_email=user_email,  # <-- Save email
+                        token_json=token_dict
+                    )
+                    db.add(new_token)
+        except _OAuthAccountMismatch as mismatch:
+            logger.error(
+                f"OAuth account mismatch for user_id {user_id}: "
+                f"existing account {mismatch.existing_email} != returned account {mismatch.new_email}"
+            )
+            error_params = {
+                "status": "failure",
+                "error_message": "This Google account does not match the account already connected.",
+            }
+            redirect_url = f"{settings.FRONTEND_OAUTH_CALLBACK_URI}?{urlencode(error_params)}"
+            return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
         # Success redirect
         success_params = {"status": "success", "user_id": str(user_id)}
