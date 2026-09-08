@@ -1,51 +1,30 @@
-# server/setup_google.py
-import json
-from functools import lru_cache
+"""JWT authentication and thin FastAPI dependencies for Google providers."""
+
 import logging
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build, Resource
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from googleapiclient.discovery import Resource
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.auth import AuthenticatedPrincipal
 from server.config import settings
 from server.database import get_agent_db
-from server.models import AgentToken
+from server.services.credentials import (
+    CredentialEncryptionUnavailable,
+    GoogleConnection,
+    GoogleCredentialsUnavailable,
+    GoogleReconnectRequired,
+    build_google_api_service,
+    load_connected_google_connection,
+)
 
 logger = logging.getLogger(__name__)
-
-# Scopes
-_SCOPES = [
-    "https://mail.google.com/",  
-     "https://www.googleapis.com/auth/gmail.modify",  # Add this line# Read, compose, send, modify Gmail
-    "https://www.googleapis.com/auth/calendar",       # Read/write access to Calendars
-    "https://www.googleapis.com/auth/tasks" ,    
-    "https://www.googleapis.com/auth/userinfo.email",  # <--- REQUIRED!!!
-    "openid"# Read/write access to Tasks
-]
-
-@lru_cache()
-def get_client_config():
-    with open(settings.GOOGLE_OAUTH_CLIENT_SECRETS, 'r') as f:
-        return json.load(f)
-
-def build_credentials(token_info: dict, refresh_if_expired: bool = True) -> Credentials:
-    creds = Credentials.from_authorized_user_info(token_info, _SCOPES)
-    if refresh_if_expired and creds.expired and creds.refresh_token:
-        logger.info("Refreshing expired credentials for user")
-        creds.refresh(Request())
-    return creds
-
-@lru_cache()
-def _gmail_builder():
-    return build
-
 security = HTTPBearer(auto_error=False)
 _AUTHENTICATION_ERROR_DETAIL = "Could not validate credentials"
+_RECONNECT_REQUIRED_DETAIL = "Google account reconnection is required"
+_CREDENTIALS_UNAVAILABLE_DETAIL = "Google credentials are temporarily unavailable"
 
 
 def _authentication_error() -> HTTPException:
@@ -82,56 +61,61 @@ def get_current_user_info(
         raise _authentication_error() from None
 
 
-async def get_agent_token_row(
+def _credential_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, GoogleReconnectRequired):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_RECONNECT_REQUIRED_DETAIL)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_CREDENTIALS_UNAVAILABLE_DETAIL,
+    )
+
+
+async def get_connected_google_connection(
     principal: AuthenticatedPrincipal = Depends(get_current_user_info),
     db: AsyncSession = Depends(get_agent_db),
-) -> AgentToken:
-    """Retrieve the agent credential row for the authenticated principal."""
-    row = await db.get(AgentToken, principal.user_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Agent credentials not found for user")
-    
-    return row
+) -> GoogleConnection:
+    """Resolve one persisted Google account once per FastAPI request."""
+    try:
+        return await load_connected_google_connection(principal.user_id, db)
+    except (
+        CredentialEncryptionUnavailable,
+        GoogleReconnectRequired,
+        GoogleCredentialsUnavailable,
+    ) as exc:
+        raise _credential_http_error(exc) from None
+
+
+async def _build_service(
+    connection: GoogleConnection,
+    service_name: str,
+    version: str,
+) -> Resource:
+    try:
+        return await build_google_api_service(connection, service_name, version)
+    except GoogleCredentialsUnavailable as exc:
+        raise _credential_http_error(exc) from None
+
 
 async def get_gmail_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('gmail', 'v1', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Gmail service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Gmail service")
+    return await _build_service(connection, "gmail", "v1")
+
 
 async def get_calendar_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('calendar', 'v3', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Calendar service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Calendar service")
+    return await _build_service(connection, "calendar", "v3")
+
 
 async def get_tasks_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('tasks', 'v1', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Tasks service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Tasks service")
+    return await _build_service(connection, "tasks", "v1")
+
 
 async def get_user_email(
-    gmail_service: Resource = Depends(get_gmail_service)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> str:
-    try:
-        profile = gmail_service.users().getProfile(userId='me').execute()
-        return profile.get('emailAddress')
-    except Exception as e:
-        logger.exception(f"Error fetching user email: {e}")
-        raise HTTPException(status_code=500, detail="Could not retrieve user email")
+    """Return the persisted, verified Google identity without a provider round trip."""
+    return connection.google_email

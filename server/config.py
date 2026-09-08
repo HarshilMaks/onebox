@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URI: str
     FRONTEND_OAUTH_CALLBACK_URI: str
 
+    # Per-user OAuth tokens are encrypted with the active key from this
+    # read-only JSON keyring. Leave both unset only when no credential operation
+    # is enabled; OAuth connection/refresh requests then fail closed.
+    OAUTH_TOKEN_KEYRING_PATH: Path | None = None
+    OAUTH_TOKEN_ACTIVE_KEY_ID: str | None = None
+
     # Vertex/GenAI configuration. Project, location, and model have no defaults.
     GOOGLE_PROJECT_ID: str
     GOOGLE_LOCATION: str
@@ -191,7 +197,12 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL must be a redis:// or rediss:// URL with a host")
         return normalized
 
-    @field_validator("GOOGLE_OAUTH_CLIENT_SECRETS", "GOOGLE_APPLICATION_CREDENTIALS", mode="before")
+    @field_validator(
+        "GOOGLE_OAUTH_CLIENT_SECRETS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "OAUTH_TOKEN_KEYRING_PATH",
+        mode="before",
+    )
     @classmethod
     def resolve_credential_path(cls, value: object) -> Path | None:
         if value is None or (isinstance(value, str) and not value.strip()):
@@ -200,6 +211,15 @@ class Settings(BaseSettings):
             raise ValueError("credential path must be a path string")
         path = Path(value).expanduser()
         return path if path.is_absolute() else PROJECT_ROOT / path
+
+    @field_validator("OAUTH_TOKEN_ACTIVE_KEY_ID", mode="before")
+    @classmethod
+    def validate_oauth_token_active_key_id(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip() or any(character.isspace() for character in value):
+            raise ValueError("OAUTH_TOKEN_ACTIVE_KEY_ID must be nonblank text without whitespace")
+        return value.strip()
 
     @field_validator("GOOGLE_OAUTH_CLIENT_SECRETS")
     @classmethod
@@ -219,6 +239,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_role_requirements(self) -> "Settings":
+        if (self.OAUTH_TOKEN_KEYRING_PATH is None) != (self.OAUTH_TOKEN_ACTIVE_KEY_ID is None):
+            raise ValueError(
+                "OAUTH_TOKEN_KEYRING_PATH and OAUTH_TOKEN_ACTIVE_KEY_ID must be configured together"
+            )
+
         if self.SERVICE_ROLE is ServiceRole.COMBINED and self.ENVIRONMENT not in {
             Environment.DEVELOPMENT,
             Environment.TEST,
@@ -276,6 +301,13 @@ class Settings(BaseSettings):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(
                 self.GOOGLE_APPLICATION_CREDENTIALS
             )
+
+    @property
+    def oauth_token_encryption_configured(self) -> bool:
+        return (
+            self.OAUTH_TOKEN_KEYRING_PATH is not None
+            and self.OAUTH_TOKEN_ACTIVE_KEY_ID is not None
+        )
 
     @property
     def cors_allowed_origins(self) -> tuple[str, ...]:

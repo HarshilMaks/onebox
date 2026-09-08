@@ -6,16 +6,19 @@ import re
 import time
 from typing import Any, Dict, Optional
 
-from google.auth.transport.requests import Request as GoogleAuthRequest
-from googleapiclient.discovery import build as build_google_service
 from googleapiclient.errors import HttpError
 
 from agents import ExecutiveAgent
 from server.config import settings
 from server.database import AsyncSessionLocal as SessionLocal
 from server.logging_config import setup_logging
-from server.models import AgentToken
-from server.services.setup_google import build_credentials
+from server.services.credentials import (
+    CredentialEncryptionUnavailable,
+    GoogleCredentialsUnavailable,
+    GoogleReconnectRequired,
+    build_google_api_service,
+    load_connected_google_connection,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -69,44 +72,19 @@ async def initialize_gmail_service():
 
     user_uuid = settings.AUTOMATION_OWNER_ID
     if user_uuid is None:
-        # Settings validation normally prevents this, but keep this dependency safe
-        # when called directly by tests or future operator code.
         logger.error("AUTOMATION_OWNER_ID is not configured")
         return False
 
-    async with SessionLocal() as db:
-        try:
-            token_row: Optional[AgentToken] = await db.get(AgentToken, user_uuid)
-        except Exception:
-            logger.exception("Database error loading global Gmail credentials")
-            return False
-
-    if not token_row or not token_row.token_json or not token_row.user_email:
-        logger.error("Global Gmail account has no usable stored credentials")
-        return False
-
     try:
-        creds = await asyncio.to_thread(
-            build_credentials,
-            token_row.token_json,
-            False,
-        )
-        if creds.expired and creds.refresh_token:
-            await asyncio.to_thread(creds.refresh, GoogleAuthRequest())
-            async with SessionLocal() as db_for_update:
-                refreshed_token_row = await db_for_update.get(AgentToken, user_uuid)
-                if not refreshed_token_row:
-                    logger.error("Global Gmail token row disappeared during credential refresh")
-                    return False
-                refreshed_token_row.token_json = json.loads(creds.to_json())
-                await db_for_update.commit()
-
-        service = await asyncio.to_thread(
-            build_google_service,
-            "gmail",
-            "v1",
-            credentials=creds,
-        )
+        async with SessionLocal() as db:
+            connection = await load_connected_google_connection(user_uuid, db)
+        service = await build_google_api_service(connection, "gmail", "v1")
+    except GoogleReconnectRequired:
+        logger.error("Global Gmail account requires reconnection")
+        return False
+    except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable):
+        logger.error("Global Gmail credentials are temporarily unavailable")
+        return False
     except Exception:
         logger.exception("Failed to initialize global Gmail credentials or client")
         return False
@@ -117,7 +95,7 @@ async def initialize_gmail_service():
         return False
 
     GMAIL_SERVICE = service
-    AGENT_USER_EMAIL_FOR_SERVICE = token_row.user_email
+    AGENT_USER_EMAIL_FOR_SERVICE = connection.google_email
     logger.info("Global Gmail service and watch initialized")
     return True
 

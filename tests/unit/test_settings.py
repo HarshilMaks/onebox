@@ -48,6 +48,8 @@ def settings_class(monkeypatch):
         "PUBSUB_PUSH_AUDIENCE",
         "PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "OAUTH_TOKEN_KEYRING_PATH",
+        "OAUTH_TOKEN_ACTIVE_KEY_ID",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -73,6 +75,23 @@ def test_api_role_does_not_require_automation_settings(settings_class):
         "http://localhost:3000",
         "https://admin.example.invalid",
     )
+
+
+def test_oauth_token_keyring_settings_must_be_a_complete_pair(settings_class):
+    with pytest.raises(ValidationError, match="must be configured together"):
+        build_settings(
+            settings_class,
+            OAUTH_TOKEN_KEYRING_PATH="test-oauth-keyring.json",
+        )
+
+    configured = build_settings(
+        settings_class,
+        OAUTH_TOKEN_KEYRING_PATH="test-oauth-keyring.json",
+        OAUTH_TOKEN_ACTIVE_KEY_ID="primary-2026",
+    )
+
+    assert configured.oauth_token_encryption_configured is True
+    assert configured.OAUTH_TOKEN_KEYRING_PATH == REPOSITORY_ROOT / "test-oauth-keyring.json"
 
 
 def test_worker_fails_closed_when_automation_configuration_is_incomplete(settings_class):
