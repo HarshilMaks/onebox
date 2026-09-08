@@ -240,7 +240,7 @@ export const ONEBOX_API_ENDPOINTS = {
   checkInboxCount: { method: "POST", path: "/mail/check-inbox", auth: "jwt" } as const,
 
   // -- Global Gmail automation health (operator-facing) --
-  getGlobalGmailHealth: { method: "GET", path: "/mail/agent/health", auth: "none" } as const,
+  getGlobalGmailHealth: { method: "GET", path: "/mail/agent/health", auth: "jwt" } as const,
 } satisfies Record<string, { method: string; path: string; auth: "jwt" | "none" }>;
 
 /**

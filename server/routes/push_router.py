@@ -1,26 +1,52 @@
-# mail_router.py
+import json
 import logging
-import json # For specific exception handling
-from fastapi import APIRouter, Request, BackgroundTasks, Depends, HTTPException # Added HTTPException
-from googleapiclient.errors import HttpError # For Google API errors
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from googleapiclient.errors import HttpError
 
 from server.logging_config import setup_logging
-from server.services.mail import (
-    fetch_and_process_email,        # Async
-    get_gmail_service_instance,     # Synchronous, returns global GMAIL_SERVICE
-    setup_gmail_watch,              # Async
-    process_email_notification,     # Async
-    execute_google_request,
-    extract_and_decode_message,     # Synchronous
-)
 from server.schemas import GlobalGmailHealthResponse
+from server.services.mail import (
+    AGENT_USER_ID_FOR_SERVICE,
+    execute_google_request,
+    extract_and_decode_message,
+    fetch_and_process_email,
+    get_gmail_service_instance,
+    process_email_notification,
+    setup_gmail_watch,
+)
+from server.services.setup_google import get_current_user_info
 
-# Configure logging
 setup_logging()
 logger = logging.getLogger(__name__)
-
-# Create the router
 router = APIRouter(prefix="/mail", tags=["mail"])
+
+
+async def require_global_gmail_operator(
+    user_info: dict = Depends(get_current_user_info),
+) -> dict:
+    """Authorize only the JWT owner of the configured global Gmail account.
+
+    Global automation routes operate on a single configured mailbox, not the
+    caller's per-user mailbox. They must therefore fail closed unless the
+    caller is exactly that configured account owner.
+    """
+    if not AGENT_USER_ID_FOR_SERVICE:
+        logger.error("Global Gmail operator identity is not configured")
+        raise HTTPException(status_code=503, detail="Global Gmail operator is not configured")
+
+    try:
+        global_owner_id = UUID(AGENT_USER_ID_FOR_SERVICE)
+    except (TypeError, ValueError):
+        logger.error("Global Gmail operator identity is invalid")
+        raise HTTPException(status_code=503, detail="Global Gmail operator is not configured")
+
+    if user_info["user_id"] != global_owner_id:
+        logger.warning("Denied global Gmail operator request from a non-owner")
+        raise HTTPException(status_code=403, detail="Not authorized for global Gmail operations")
+
+    return user_info
 
 async def get_active_gmail_service(
     gmail_service = Depends(get_gmail_service_instance)
@@ -77,7 +103,9 @@ async def receive_gmail_notification(
         raise HTTPException(status_code=500, detail="Internal server error processing notification.")
 
 @router.get("/agent/health", response_model=GlobalGmailHealthResponse)
-async def health_check():
+async def health_check(
+    _operator: dict = Depends(require_global_gmail_operator),
+):
     """
     Health check endpoint. Checks if the global Gmail service instance is initialized.
     """
@@ -96,7 +124,8 @@ async def health_check():
 
 @router.post("/renew-watch")
 async def renew_watch(
-    gmail_service = Depends(get_active_gmail_service) # Use the robust dependency
+    _operator: dict = Depends(require_global_gmail_operator),
+    gmail_service = Depends(get_active_gmail_service),
 ):
     """
     Manually renew the Gmail watch for the globally configured AGENT_USER_ID_FOR_SERVICE.
@@ -121,8 +150,9 @@ async def renew_watch(
     
 @router.post("/agent/check-inbox")
 async def check_inbox(
-    background_tasks: BackgroundTasks, 
-    gmail_service = Depends(get_active_gmail_service) # Use the robust dependency
+    background_tasks: BackgroundTasks,
+    _operator: dict = Depends(require_global_gmail_operator),
+    gmail_service = Depends(get_active_gmail_service),
 ):
     """
     Manually check for unread emails for AGENT_USER_ID_FOR_SERVICE and process them.
