@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -12,7 +11,6 @@ from server.config import settings
 from server.logging_config import setup_logging
 from server.schemas import GlobalGmailHealthResponse
 from server.services.mail import (
-    AGENT_USER_ID_FOR_SERVICE,
     execute_google_request,
     extract_and_decode_message,
     fetch_and_process_email,
@@ -29,8 +27,8 @@ router = APIRouter(prefix="/mail", tags=["mail"])
 
 async def require_pubsub_push_auth(request: Request) -> dict:
     """Verify a Google-signed OIDC token from the configured Pub/Sub push SA."""
-    expected_audience = settings.PUBSUB_PUSH_AUDIENCE.strip()
-    expected_email = settings.PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL.strip().casefold()
+    expected_audience = (settings.PUBSUB_PUSH_AUDIENCE or "").strip()
+    expected_email = (settings.PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL or "").strip().casefold()
     if not expected_audience or not expected_email:
         logger.error("Pub/Sub push authentication is not configured")
         raise HTTPException(status_code=503, detail="Pub/Sub push authentication is not configured")
@@ -67,20 +65,10 @@ async def require_pubsub_push_auth(request: Request) -> dict:
 async def require_global_gmail_operator(
     user_info: dict = Depends(get_current_user_info),
 ) -> dict:
-    """Authorize only the JWT owner of the configured global Gmail account.
-
-    Global automation routes operate on a single configured mailbox, not the
-    caller's per-user mailbox. They must therefore fail closed unless the
-    caller is exactly that configured account owner.
-    """
-    if not AGENT_USER_ID_FOR_SERVICE:
+    """Authorize only the JWT owner of the configured global Gmail account."""
+    global_owner_id = settings.AUTOMATION_OWNER_ID
+    if global_owner_id is None:
         logger.error("Global Gmail operator identity is not configured")
-        raise HTTPException(status_code=503, detail="Global Gmail operator is not configured")
-
-    try:
-        global_owner_id = UUID(AGENT_USER_ID_FOR_SERVICE)
-    except (TypeError, ValueError):
-        logger.error("Global Gmail operator identity is invalid")
         raise HTTPException(status_code=503, detail="Global Gmail operator is not configured")
 
     if user_info["user_id"] != global_owner_id:

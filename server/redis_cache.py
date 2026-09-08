@@ -1,19 +1,15 @@
 import json
 import logging
-import os
 
 import redis
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
+from server.config import settings
+
 
 logger = logging.getLogger(__name__)
 
-redis_client = redis.StrictRedis(
-    host=REDIS_HOST,
-    port=REDIS_PORT,
-    db=REDIS_DB,
+redis_client = redis.Redis.from_url(
+    settings.REDIS_URL,
     decode_responses=True,
 )
 

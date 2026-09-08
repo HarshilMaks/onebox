@@ -2,40 +2,35 @@ import asyncio
 import base64
 import json
 import logging
-import os
+import re
 import time
-from typing import Dict, Any, Optional
-from uuid import UUID # Ensure UUID is imported
+from typing import Any, Dict, Optional
 
-from googleapiclient.discovery import build as build_google_service # Alias to avoid name clashes
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from googleapiclient.discovery import build as build_google_service
 from googleapiclient.errors import HttpError
-from google.auth.transport.requests import Request as GoogleAuthRequest 
-
-from server.database import AsyncSessionLocal as SessionLocal
-from server.models import AgentToken
-from server.services.setup_google import build_credentials # Reusable function
-
 
 from agents import ExecutiveAgent
-import re
+from server.config import settings
+from server.database import AsyncSessionLocal as SessionLocal
 from server.logging_config import setup_logging
-from dotenv import load_dotenv
+from server.models import AgentToken
+from server.services.setup_google import build_credentials
 
-# Configure logging
 setup_logging()
 logger = logging.getLogger(__name__)
-load_dotenv()
 
-# Global variables
+# This module remains single-mailbox until Priority 7 makes automation durable.
 GMAIL_SERVICE = None
 AGENT_USER_EMAIL_FOR_SERVICE = None
-PUBSUB_TOPIC = os.environ.get("PUBSUB_TOPIC", "projects/agents-456517/topics/gmail-notifications")
-# This AGENT_USER_ID_FOR_SERVICE should be the UUID of the user whose emails this service will manage
-AGENT_USER_ID_FOR_SERVICE = os.environ.get("AGENT_USER_ID_FOR_SERVICE")
+AGENT_USER_ID_FOR_SERVICE = (
+    str(settings.AUTOMATION_OWNER_ID) if settings.AUTOMATION_OWNER_ID is not None else None
+)
 
 LAST_PROCESSED_MESSAGE_ID = None
 LAST_PROCESSED_TIME = 0
 PROCESSING_COOLDOWN = 5  # Seconds
+
 
 def should_process_email(email_content: Dict[str, Any]) -> bool:
     """Filter logic to skip spam, no-reply, and marketing emails."""
@@ -56,25 +51,27 @@ def should_process_email(email_content: Dict[str, Any]) -> bool:
         return False
     return True
 
+
 async def execute_google_request(request):
     """Run a synchronous google-api-python-client request off the event loop."""
     return await asyncio.to_thread(request.execute)
 
 
 async def initialize_gmail_service():
-    """Initialize the configured global Gmail account and start its watch."""
+    """Initialize the explicitly enabled global Gmail automation account and watch."""
     global GMAIL_SERVICE, AGENT_USER_EMAIL_FOR_SERVICE
     GMAIL_SERVICE = None
     AGENT_USER_EMAIL_FOR_SERVICE = None
 
-    if not AGENT_USER_ID_FOR_SERVICE:
-        logger.error("AGENT_USER_ID_FOR_SERVICE is not configured")
+    if not settings.runs_automation:
+        logger.info("Gmail automation is disabled for this process role")
         return False
 
-    try:
-        user_uuid = UUID(AGENT_USER_ID_FOR_SERVICE)
-    except ValueError:
-        logger.error("AGENT_USER_ID_FOR_SERVICE is not a valid UUID")
+    user_uuid = settings.AUTOMATION_OWNER_ID
+    if user_uuid is None:
+        # Settings validation normally prevents this, but keep this dependency safe
+        # when called directly by tests or future operator code.
+        logger.error("AUTOMATION_OWNER_ID is not configured")
         return False
 
     async with SessionLocal() as db:
@@ -133,7 +130,7 @@ def get_gmail_service_instance():
 def _setup_gmail_watch_sync(gmail_service):
     if not gmail_service:
         return None
-    topic_name = os.environ.get("PUBSUB_TOPIC")
+    topic_name = settings.PUBSUB_TOPIC
     if not topic_name:
         logger.error("PUBSUB_TOPIC is not configured")
         return None
