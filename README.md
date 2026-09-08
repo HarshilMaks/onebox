@@ -1,67 +1,323 @@
 # OneBox
 
-AI agent orchestration system with email, calendar, and task management.
+> Intelligent AI agent orchestration platform for automated email triage, calendar scheduling, and task management using Gemini and Google Workspace APIs.
+
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791.svg)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
+
+[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Prerequisites](#prerequisites) • [Quick Start](#quick-start) • [Configuration](#configuration) • [API Reference](#api-reference) • [Docker](#docker) • [Project Structure](#project-structure)
+
+---
+
+## Overview
+
+Managing high-volume executive communication, meeting coordination, and task tracking requires constant context switching.
+
+**OneBox** operates as an autonomous digital assistant directly integrated with Google Workspace accounts (Gmail, Google Calendar, Google Tasks). Powered by Google Gemini models with structured function calling, OneBox listens for incoming mail via real-time Google Cloud Pub/Sub push notifications, triages messages against user preferences, prepares contextual draft replies, and schedules calendar events. For destructive or sensitive actions, OneBox implements a secure human-in-the-loop pending actions workflow.
+
+---
+
+## Features
+
+- **Automated Mail Triaging:** Evaluates incoming emails against customizable rules, automatically marking promotional or no-reply emails as read while escalating actionable threads.
+- **Calendar & Meet Scheduling:** Parses natural language time requests, checks existing calendar availability, creates Google Calendar events, and generates Google Meet conference links.
+- **Task Synchronization:** Automatically creates and updates follow-up action items in Google Tasks tied to scheduled events and commitments.
+- **Human-in-the-Loop Safeguards:** Stages sensitive operations (such as sending live emails or updating calendar events) as immutable pending actions awaiting explicit user approval.
+- **Real-Time Pub/Sub Ingestion:** Receives real-time mailbox push notifications via authenticated Google Cloud Pub/Sub webhooks.
+- **Multi-Tenant OAuth Management:** Handles Google OAuth 2.0 authorization with automatic token persistence, background token refresh, and JWT-authenticated session management.
+- **High-Performance Caching:** Redis caching layer for paginated mailbox listings and message bodies to minimize external Google API latency and quota consumption.
+
+---
+
+## Architecture
+
+OneBox follows a modular, layered architecture separating HTTP routes, agent execution loops, tool adapters, and persistence layers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      FastAPI Server                         │
+│  (/mail, /executive, /generate-stream, /actions, /agent)    │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │                               │
+        OAuth & User Auth             Pub/Sub Webhooks
+               │                               │
+┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
+│  SQLAlchemy & PostgreSQL    │ │     Background Worker       │
+│  (Tokens & Pending Actions) │ │    (mail.py triage loop)    │
+└─────────────────────────────┘ └──────────────┬──────────────┘
+                                               │
+                                ┌──────────────▼──────────────┐
+                                │      Executive Agent        │
+                                │   (Gemini Function Call)    │
+                                └──────────────┬──────────────┘
+                                               │
+                   ┌───────────────────────────┼───────────────────────────┐
+                   ▼                           ▼                           ▼
+         ┌───────────────────┐       ┌───────────────────┐       ┌───────────────────┐
+         │     Gmail API     │       │   Calendar API    │       │     Tasks API     │
+         └───────────────────┘       └───────────────────┘       └───────────────────┘
+```
+
+- **API Layer (`server/routes/`):** FastAPI routers managing authentication, email operations, agent invocation, and pending action approvals.
+- **Agent Orchestrator (`agents.py`):** Multi-turn Gemini agent dynamically binding authorized Google Workspace tool callables via `functools.partial`.
+- **Tool Suite (`tools/`):** Isolated integrations for Gmail, Google Calendar, and Google Tasks.
+- **Data & State (`server/models.py`, `server/redis_cache.py`):** PostgreSQL database storing encrypted OAuth tokens and pending action states, supplemented by Redis for payload caching.
+
+---
 
 ## Prerequisites
 
-- Python 3.12+
-- Docker (for Redis)
-- PostgreSQL database
+- **Python 3.12+**
+- **PostgreSQL 14+**
+- **Docker & Docker Compose** (for running Redis or containerized application)
+- **Google Cloud Platform Project** with the following APIs enabled:
+  - Gmail API
+  - Google Calendar API
+  - Google Tasks API
+  - Cloud Pub/Sub API
+  - Vertex AI API / Google GenAI API
+
+### Required Google Credentials
+
+Create or place these files in the project root:
+
+| File | Description |
+|------|-------------|
+| `onebox_oauth.json` | Google OAuth 2.0 Web Client credentials (client ID, client secret, redirect URIs) |
+| `executive-agent.json` | Google Cloud service account key with Pub/Sub and Vertex AI permissions |
+
+---
 
 ## Quick Start
 
+### 1. Clone and Set Up Environment
+
 ```bash
-# 1. Clone and enter
 git clone https://github.com/HarshilMaks/onebox.git
 cd onebox
 
-# 2. Create virtual environment
 python3.12 -m venv .venv
 source .venv/bin/activate
 
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Set up environment
-cp .env.example .env
-# Edit .env with your actual credentials
-
-# 5. Start Redis
-bash scripts/redis_setup.sh
-# OR: docker run -d --name redis -p 6379:6379 redis
-
-# 6. Run database migrations
-alembic upgrade head
-
-# 7. Start the server
-make run
-# OR: uvicorn server.main:app --reload --log-config server/logging.ini --host 0.0.0.0 --port 8000
+make install
 ```
 
-## Required Secrets (not in repo)
-
-Create these files after cloning (see `.env.example`):
-
-| File | Purpose |
-|------|---------|
-| `.env` | Environment variables (DB, JWT, OAuth config) |
-| `executive-agent.json` | Google service account key |
-| `onebox_oauth.json` | Google OAuth client secrets |
-| `credentials.json` | Gmail API credentials |
-| `token.json` | OAuth tokens (auto-generated) |
-
-## Docker (Alternative)
+### 2. Configure Environment Variables
 
 ```bash
-docker compose up --build
+cp .env.example .env
 ```
+
+Edit `.env` with your PostgreSQL database connection, JWT secret, and Google Cloud parameters.
+
+### 3. Start Redis
+
+Start Redis using the included helper script:
+
+```bash
+bash scripts/redis_setup.sh
+```
+
+Or run it via Docker directly:
+
+```bash
+docker run -d --name redis -p 6379:6379 redis:latest
+```
+
+### 4. Run Database Migrations
+
+Apply database migrations using Alembic:
+
+```bash
+alembic upgrade head
+```
+
+### 5. Start the Server
+
+```bash
+make run
+```
+
+The server will start at `http://0.0.0.0:8000`.
+
+> [!TIP]
+> Swagger UI documentation is available at `http://localhost:8000/docs` and ReDoc at `http://localhost:8000/redoc`.
+
+---
+
+## Configuration
+
+The application is configured through environment variables in `.env`:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | Yes | - | Async PostgreSQL connection string (`postgresql+asyncpg://...`) |
+| `SECRET_KEY` | Yes | - | Secret key used to sign and verify JWT tokens (`openssl rand -hex 32`) |
+| `ALGORITHM` | No | `HS256` | JWT signing algorithm |
+| `GOOGLE_OAUTH_CLIENT_SECRETS` | No | `onebox_oauth.json` | Path to Google OAuth client secrets file |
+| `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback endpoint (e.g. `https://api.example.com/agent/oauth/callback`) |
+| `FRONTEND_OAUTH_CALLBACK_URI` | Yes | - | Frontend URI redirected to after successful OAuth exchange |
+| `PUBSUB_TOPIC` | Yes | - | Full Google Cloud Pub/Sub topic string for mailbox notifications |
+| `PUBSUB_SUBSCRIPTION` | Yes | - | Google Cloud Pub/Sub subscription string |
+| `GOOGLE_APPLICATION_CREDENTIALS` | No | `executive-agent.json` | Path to Google service account credentials file |
+| `PUBSUB_PUSH_AUDIENCE` | No | `""` | Target audience URL configured on the Pub/Sub push subscription |
+| `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` | No | `""` | Service account email authorized to deliver push notifications |
+| `CORS_ALLOWED_ORIGINS` | No | `""` | Comma-separated list of permitted frontend browser origins |
+
+> [!IMPORTANT]
+> The Pub/Sub push endpoint `/mail/notifications` validates Google OIDC identity tokens when `PUBSUB_PUSH_AUDIENCE` and `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` are configured. Ensure these match your GCP Pub/Sub push subscription settings.
+
+---
+
+## API Reference
+
+All protected endpoints require an `Authorization: Bearer <JWT_TOKEN>` header.
+
+### 1. Health & Readiness
+
+```http
+GET / HTTP/1.1
+Host: localhost:8000
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "global_gmail_service": "ready"
+}
+```
+
+### 2. Invoke Executive Agent
+
+Executes conversational planning or triggers tools (email drafting, calendar scheduling, task creation):
+
+```http
+POST /executive/ HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+
+{
+  "input": "Schedule a 45-minute sync with sarah@example.com tomorrow at 3pm to review sprint goals"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "result": "✓ Scheduled 'Sync to review sprint goals' for 15-09-2026 15:00 and added reminder task."
+}
+```
+
+### 3. Approve Pending Action
+
+Executes a staged action (such as sending an email or updating an event):
+
+```http
+POST /actions/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/approve HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "action_type": "send_email",
+  "status": "completed",
+  "summary": "Send email to sarah@example.com regarding Sprint Goals",
+  "result": {
+    "message_id": "18f67bc82a1"
+  }
+}
+```
+
+### 4. Fetch Inbox Emails
+
+Retrieves paginated emails with inline CID images automatically converted to browser-safe data URIs:
+
+```http
+GET /mail/emails?folder=inbox&limit=10 HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (200 OK):**
+```json
+{
+  "emails": [
+    {
+      "id": "18f67bc82a1",
+      "subject": "Q3 Planning Meeting",
+      "sender": "sarah@example.com",
+      "to": ["user@example.com"],
+      "snippet": "Can we meet tomorrow to discuss roadmap priorities?",
+      "is_read": false,
+      "is_starred": true,
+      "labels": ["INBOX", "UNREAD", "STARRED"]
+    }
+  ],
+  "next_page_token": "0982347102934"
+}
+```
+
+---
+
+## Docker Deployment
+
+To build and run both the FastAPI service and Redis container using Docker Compose:
+
+```bash
+docker compose up --build -d
+```
+
+To view application logs:
+
+```bash
+docker compose logs -f app
+```
+
+To stop the containers:
+
+```bash
+docker compose down
+```
+
+---
 
 ## Project Structure
 
 ```
-server/          # FastAPI backend
-tools/           # Agent tools (email, calendar, tasks)
-alembic/         # Database migrations
-clients/         # Client libraries
-scripts/         # Utility scripts
+onebox/
+├── server/
+│   ├── routes/              # API endpoints
+│   │   ├── agent_oauth.py   # Google OAuth start & callback flows
+│   │   ├── agent_router.py  # Agent execution & pending action approval
+│   │   ├── google_mail.py   # Gmail fetch, search, star, trash operations
+│   │   └── push_router.py   # Google Pub/Sub push notification receiver
+│   ├── services/            # Core business & background services
+│   │   ├── mail.py          # Background email worker & triage pipeline
+│   │   ├── pending_actions.py # Human-in-the-loop pending action store
+│   │   └── setup_google.py  # Google API service builders & JWT auth
+│   ├── models.py            # SQLAlchemy database models
+│   ├── database.py          # Async database engine & session factory
+│   ├── redis_cache.py       # Redis caching utilities
+│   └── main.py              # FastAPI application entrypoint & lifespan
+├── tools/                   # Agent tool implementations
+│   ├── calender/            # Google Calendar tool & invite generators
+│   ├── email/               # Gmail send, reply, and draft tools
+│   ├── tasks/               # Google Tasks creation & list management
+│   └── llm_tools.py         # Standardized tool declarations for Gemini
+├── clients/                 # LLM client abstractions & system prompts
+│   ├── base.py              # Vertex AI & GenAI client setup
+│   └── prompt.py            # Executive & email agent system instructions
+├── alembic/                 # Database migrations
+├── scripts/                 # Utility scripts (e.g., redis_setup.sh)
+├── Dockerfile               # Multi-stage production container image
+├── docker-compose.yaml      # Multi-container orchestration (App + Redis)
+├── Makefile                 # Common developer workflow targets
+└── user_config.yaml         # User profile, triage rules, & preferences
 ```
