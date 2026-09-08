@@ -1,6 +1,7 @@
 """Typed runtime configuration for every supported OneBox process role."""
 
 from enum import Enum
+import os
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -215,6 +216,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_role_requirements(self) -> "Settings":
+        if self.SERVICE_ROLE is ServiceRole.COMBINED and self.ENVIRONMENT not in {
+            Environment.DEVELOPMENT,
+            Environment.TEST,
+        }:
+            raise ValueError("SERVICE_ROLE=combined is allowed only in development or test")
+
         if self.SERVICE_ROLE is ServiceRole.API and self.AUTOMATION_ENABLED:
             raise ValueError("AUTOMATION_ENABLED requires SERVICE_ROLE=automation_worker or combined")
 
@@ -261,6 +268,13 @@ class Settings(BaseSettings):
                 raise ValueError("CORS_ALLOWED_ORIGINS must use HTTPS in production")
 
         return self
+
+    def configure_google_application_credentials(self) -> None:
+        """Expose the configured read-only credential path to Google ADC clients."""
+        if self.GOOGLE_APPLICATION_CREDENTIALS is not None:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(
+                self.GOOGLE_APPLICATION_CREDENTIALS
+            )
 
     @property
     def cors_allowed_origins(self) -> tuple[str, ...]:

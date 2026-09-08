@@ -47,6 +47,7 @@ def settings_class(monkeypatch):
         "PUBSUB_SUBSCRIPTION",
         "PUBSUB_PUSH_AUDIENCE",
         "PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL",
+        "GOOGLE_APPLICATION_CREDENTIALS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -121,6 +122,28 @@ def test_unknown_environment_file_values_are_rejected(settings_class, tmp_path):
 
     with pytest.raises(ValidationError, match="UNDOCUMENTED_SETTING"):
         settings_class(_env_file=environment_file, **BASE_SETTINGS)
+
+
+def test_combined_role_is_rejected_in_production(settings_class):
+    with pytest.raises(ValidationError, match="SERVICE_ROLE=combined is allowed only"):
+        build_settings(
+            settings_class,
+            ENVIRONMENT="production",
+            SERVICE_ROLE="combined",
+        )
+
+
+def test_settings_environment_file_bootstraps_google_adc(settings_class, monkeypatch, tmp_path):
+    environment_file = tmp_path / "runtime.env"
+    environment_file.write_text("GOOGLE_APPLICATION_CREDENTIALS=test-adc.json\n", encoding="utf-8")
+    settings = settings_class(_env_file=environment_file, **BASE_SETTINGS)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    settings.configure_google_application_credentials()
+
+    assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == str(
+        REPOSITORY_ROOT / "test-adc.json"
+    )
 
 
 def test_production_requires_secure_redirects_and_a_strong_secret(settings_class):

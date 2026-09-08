@@ -11,6 +11,7 @@ class Agent:
         self.model_name = model_name or settings.GOOGLE_MODEL
 
     def _init_client(self):
+        settings.configure_google_application_credentials()
         return Client(
             vertexai=True,
             project=settings.GOOGLE_PROJECT_ID,
