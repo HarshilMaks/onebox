@@ -247,13 +247,10 @@ def search_emails(
             f"Failed during email search with query '{query}' for user {user_id}: "
             f"{e.content.decode() if e.content else str(e)}"
         )
-        raise HTTPException(
-            status_code=e.resp.status,
-            detail=f"Gmail API search error: {e.content.decode() if e.content else str(e)}",
-        )
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred during search with query '{query}' for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error during search: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
     return results
 
@@ -333,10 +330,10 @@ async def fetch_emails(
     except HttpError as e: # Catch HttpError specifically
         content = e.content.decode() if e.content else str(e)
         logger.exception(f"Gmail API error fetching emails from {folder} for user {user_id}: {content}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API list error: {content}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"Unexpected error fetching emails from {folder} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.get("/emails/{email_id}", response_model=EmailDetail)
@@ -363,10 +360,10 @@ async def fetch_email_by_id(
     except HttpError as e:
         content = e.content.decode() if e.content else str(e)
         logger.exception(f"Gmail API error fetching email ID {email_id} for user {user_id}: {content}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API fetch error: {content}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"Unexpected error fetching email ID {email_id} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 # Other endpoints (mark_as_read, unread, trash, etc.) remain largely the same but ensure logging includes user_id if relevant
@@ -390,7 +387,7 @@ async def mark_as_read(
         return {"id": email_id, "status": "marked as read"}
     except HttpError as e:
         logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API modify error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
 
 @router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
 async def mark_as_unread(
@@ -409,10 +406,10 @@ async def mark_as_unread(
         return {"id": email_id, "status": "marked as unread"}
     except HttpError as e:
         logger.exception(f"Failed to mark email {email_id} as unread for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API modify error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while marking email {email_id} as unread for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.post("/emails/{email_id}/trash", response_model=MailMutationResponse)
@@ -430,10 +427,10 @@ async def move_to_trash(
         return {"id": email_id, "status": "moved to trash"}
     except HttpError as e:
         logger.exception(f"Failed to move email {email_id} to trash for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API trash error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while moving email {email_id} to trash for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 @router.post("/emails/{email_id}/restore", response_model=MailMutationResponse)
 async def restore_from_trash(
@@ -450,10 +447,10 @@ async def restore_from_trash(
         return {"id": email_id, "status": "restored from trash"}
     except HttpError as e:
         logger.exception(f"Failed to restore email {email_id} from trash for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API untrash error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while restoring email {email_id} from trash for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.delete("/emails/{email_id}", response_model=MailMutationResponse)
@@ -470,10 +467,10 @@ async def delete_email(
         return {"id": email_id, "status": "permanently deleted"}
     except HttpError as e:
         logger.exception(f"Failed to delete email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API delete error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while deleting email {email_id} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.post("/emails/{email_id}/star", response_model=MailMutationResponse)
@@ -516,10 +513,10 @@ async def toggle_star(
         return {"id": email_id, "status": "starred" if not is_starred else "unstarred"} # Return new status
     except HttpError as e:
         logger.exception(f"Failed to toggle star for email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API modify error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while toggling star for email {email_id} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 @router.post("/send", response_model=SendEmailResponse)
 async def send_email_api( # Renamed to avoid conflict
@@ -547,10 +544,10 @@ async def send_email_api( # Renamed to avoid conflict
         return {"id": message.get('id'), "status": "sent"}
     except HttpError as e:
         logger.exception(f"Failed to send email for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API send error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while sending email for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.post("/drafts", response_model=SaveDraftResponse)
@@ -580,10 +577,10 @@ async def save_draft_api( # Renamed
         return {"id": draft['id'], "status": status_msg, "draft_id": draft['id']}
     except HttpError as e:
         logger.exception(f"Failed to save draft for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API draft error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while saving draft for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.get("/search", response_model=List[EmailListItem])
@@ -614,7 +611,7 @@ async def search_endpoint(
         raise
     except Exception as e:
         logger.exception(f"An unexpected error occurred in the search endpoint for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -637,7 +634,7 @@ async def check_inbox_api( # Renamed
         return {"status": "checked", "inbox_message_count_estimate": count}
     except HttpError as e:
         logger.exception(f"Failed to check inbox count for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Gmail API count error: {e.content.decode() if e.content else str(e)}")
+        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except Exception as e:
         logger.exception(f"An unexpected error occurred while checking inbox count for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
