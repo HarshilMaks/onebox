@@ -120,7 +120,7 @@ def test_unknown_environment_file_values_are_rejected(settings_class, tmp_path):
     environment_file = tmp_path / ".env"
     environment_file.write_text("UNDOCUMENTED_SETTING=unexpected\n", encoding="utf-8")
 
-    with pytest.raises(ValidationError, match="UNDOCUMENTED_SETTING"):
+    with pytest.raises(ValidationError, match="undocumented_setting"):
         settings_class(_env_file=environment_file, **BASE_SETTINGS)
 
 
