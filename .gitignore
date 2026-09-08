@@ -8,6 +8,22 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Test, lint, type-check, and coverage output
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Python package build metadata
+build/
+dist/
+*.egg-info/
+
 # Databases / Local Files
 *.db
 *.sqlite3

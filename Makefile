@@ -3,10 +3,17 @@ VENV ?= .venv
 PIP := $(VENV)/bin/pip
 PYTHON_BIN := $(VENV)/bin/python
 
-.PHONY: clean install lint test check run run-dev compose-up compose-down migrate image-smoke
+.PHONY: clean distclean install lint test check run run-dev compose-up compose-down migrate image-smoke
 
 clean:
-	find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .tox .nox .coverage htmlcov coverage.xml build dist
+	find . -path './.git' -prune -o -path './$(VENV)' -prune -o \
+		-type d \( -name '__pycache__' -o -name '*.egg-info' \) -prune -exec rm -rf {} +
+	find . -path './.git' -prune -o -path './$(VENV)' -prune -o \
+		-type f \( -name '*.py[co]' -o -name '.coverage.*' \) -exec rm -f {} +
+
+distclean: clean
+	rm -rf $(VENV)
 
 install:
 	$(PYTHON) -m venv $(VENV)
