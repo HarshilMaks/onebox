@@ -1,10 +1,14 @@
+import asyncio
 import json
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token
 from googleapiclient.errors import HttpError
 
+from server.config import settings
 from server.logging_config import setup_logging
 from server.schemas import GlobalGmailHealthResponse
 from server.services.mail import (
@@ -21,6 +25,43 @@ from server.services.setup_google import get_current_user_info
 setup_logging()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mail", tags=["mail"])
+
+
+async def require_pubsub_push_auth(request: Request) -> dict:
+    """Verify a Google-signed OIDC token from the configured Pub/Sub push SA."""
+    expected_audience = settings.PUBSUB_PUSH_AUDIENCE.strip()
+    expected_email = settings.PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL.strip().casefold()
+    if not expected_audience or not expected_email:
+        logger.error("Pub/Sub push authentication is not configured")
+        raise HTTPException(status_code=503, detail="Pub/Sub push authentication is not configured")
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.casefold() != "bearer" or not token:
+        logger.warning("Rejected Pub/Sub push request without a bearer token")
+        raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication")
+
+    try:
+        claims = await asyncio.to_thread(
+            id_token.verify_oauth2_token,
+            token,
+            GoogleAuthRequest(),
+            expected_audience,
+        )
+    except Exception:
+        logger.warning("Rejected Pub/Sub push request with an invalid OIDC token")
+        raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication")
+
+    email = claims.get("email")
+    if (
+        claims.get("email_verified") is not True
+        or not isinstance(email, str)
+        or email.strip().casefold() != expected_email
+    ):
+        logger.warning("Rejected Pub/Sub push request from an unexpected principal")
+        raise HTTPException(status_code=403, detail="Pub/Sub push principal is not authorized")
+
+    return claims
 
 
 async def require_global_gmail_operator(
@@ -68,9 +109,10 @@ async def get_active_gmail_service(
 
 @router.post("/notifications")
 async def receive_gmail_notification(
-    request: Request, 
+    request: Request,
     background_tasks: BackgroundTasks,
-    gmail_service = Depends(get_active_gmail_service) # Use the robust dependency
+    _push_claims: dict = Depends(require_pubsub_push_auth),
+    gmail_service = Depends(get_active_gmail_service),
 ):
     """
     Endpoint to receive Gmail push notifications from Pub/Sub.

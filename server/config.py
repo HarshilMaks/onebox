@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     PUBSUB_TOPIC: str
     PUBSUB_SUBSCRIPTION: str
     GOOGLE_APPLICATION_CREDENTIALS: str
+    # Google-signed OIDC values for the /mail/notifications push receiver.
+    # Empty values intentionally disable that endpoint until deployment configures it.
+    PUBSUB_PUSH_AUDIENCE: str = ""
+    PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL: str = ""
 
     class Config:
         env_file = ".env"
