@@ -1,25 +1,24 @@
-from typing import List, Optional
-from google import genai
-from google.genai import Client
-from google.genai.types import GenerateContentConfig
 from abc import abstractmethod
 
-# model names
-# model_name="gemini-2.5-pro-preview-03-25"
+from google.genai import Client
+
+from server.config import settings
+
 
 class Agent:
-    def __init__(self, model_name: str = "gemini-2.0-flash-lite"):
+    def __init__(self, model_name: str | None = None):
         self.client = self._init_client()
-        self.model_name = model_name
+        self.model_name = model_name or settings.GOOGLE_MODEL
 
     def _init_client(self):
+        settings.configure_google_application_credentials()
         return Client(
             vertexai=True,
-            project="agents-456517",
-            location="us-central1",
+            project=settings.GOOGLE_PROJECT_ID,
+            location=settings.GOOGLE_LOCATION,
         )
-        
-    @abstractmethod   
+
+    @abstractmethod
     def run():
         pass
         """

@@ -1,0 +1,28 @@
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+# Preserve the legacy baseline without weakening syntax-critical checks globally.
+[tool.ruff.lint.per-file-ignores]
+"agents.py" = ["F541"]
+"clients/prompt.py" = ["F401"]
+"server/routes/agent_router.py" = ["F401"]
+"server/routes/google_mail.py" = ["E701", "E722", "F401", "F841"]
+"server/routes/push_router.py" = ["F541"]
+"server/services/mail.py" = ["E701", "F841"]
+"server/services/setup_google.py" = ["F401", "F841"]
+"tools/calender/calendar_tool.py" = ["F401"]
+"tools/email/fetch_gmails.py" = ["F401"]
+"tools/email/send_gmail.py" = ["E701"]
+"tools/llm_tools.py" = ["F401"]
+"tools/utils.py" = ["E701"]

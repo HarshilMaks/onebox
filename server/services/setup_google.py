@@ -1,150 +1,121 @@
-# server/setup_google.py
-import json
-from functools import lru_cache
-import logging
-from uuid import UUID # <-- Import UUID again
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build, Resource
-from typing import Dict, Tuple
-from sqlalchemy.ext.asyncio import AsyncSession
-from jose import jwt
+"""JWT authentication and thin FastAPI dependencies for Google providers."""
 
-from server.models import AgentToken
-from server.database import get_agent_db
+import logging
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from googleapiclient.discovery import Resource
+from jose import JWTError, jwt
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from server.auth import AuthenticatedPrincipal
 from server.config import settings
+from server.database import get_agent_db
+from server.services.credentials import (
+    CredentialEncryptionUnavailable,
+    GoogleConnection,
+    GoogleCredentialsUnavailable,
+    GoogleReconnectRequired,
+    build_google_api_service,
+    load_connected_google_connection,
+)
 
 logger = logging.getLogger(__name__)
+security = HTTPBearer(auto_error=False)
+_AUTHENTICATION_ERROR_DETAIL = "Could not validate credentials"
+_RECONNECT_REQUIRED_DETAIL = "Google account reconnection is required"
+_CREDENTIALS_UNAVAILABLE_DETAIL = "Google credentials are temporarily unavailable"
 
-# Scopes
-_SCOPES = [
-    "https://mail.google.com/",  
-     "https://www.googleapis.com/auth/gmail.modify",  # Add this line# Read, compose, send, modify Gmail
-    "https://www.googleapis.com/auth/calendar",       # Read/write access to Calendars
-    "https://www.googleapis.com/auth/tasks" ,    
-    "https://www.googleapis.com/auth/userinfo.email",  # <--- REQUIRED!!!
-    "openid"# Read/write access to Tasks
-]
 
-@lru_cache()
-def get_client_config():
-    with open(settings.GOOGLE_OAUTH_CLIENT_SECRETS, 'r') as f:
-        return json.load(f)
+def _authentication_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=_AUTHENTICATION_ERROR_DETAIL,
+    )
 
-def build_credentials(token_info: dict, refresh_if_expired: bool = True) -> Credentials:
-    creds = Credentials.from_authorized_user_info(token_info, _SCOPES)
-    if refresh_if_expired and creds.expired and creds.refresh_token:
-        logger.info("Refreshing expired credentials for user")
-        creds.refresh(Request())
-    return creds
-
-@lru_cache()
-def _gmail_builder():
-    return build
-
-security = HTTPBearer()
 
 def get_current_user_info(
-    creds: HTTPAuthorizationCredentials = Depends(security)
-) -> Dict[str, str]:  # Change return type to Dict
-    """
-    Extracts and validates the JWT from the Authorization header
-    and returns a dictionary containing user ID and email.
-    """
+    creds: HTTPAuthorizationCredentials | None = Depends(security),
+) -> AuthenticatedPrincipal:
+    """Return a verified, immutable application principal for a bearer JWT."""
+    if creds is None or not isinstance(creds.credentials, str) or not creds.credentials.strip():
+        raise _authentication_error()
+
     try:
         payload = jwt.decode(
             creds.credentials,
             settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
+            algorithms=[settings.ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
+            options={"require_exp": True},
         )
+        return AuthenticatedPrincipal.from_verified_claims(payload)
+    except HTTPException:
+        raise
+    except (jwt.ExpiredSignatureError, JWTError, TypeError, ValueError):
+        logger.warning("JWT authentication failed")
+        raise _authentication_error() from None
+    except Exception:
+        logger.exception("Unexpected JWT authentication failure")
+        raise _authentication_error() from None
 
-        auth_user_id_str = payload.get('sub')
-        email = payload.get('email')
 
-        if auth_user_id_str is None:
-            logger.warning("JWT payload missing 'sub' claim")
-            raise HTTPException(status_code=401, detail="Could not validate credentials (user ID missing)")
+def _credential_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, GoogleReconnectRequired):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_RECONNECT_REQUIRED_DETAIL)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_CREDENTIALS_UNAVAILABLE_DETAIL,
+    )
 
-        if email is None:
-            logger.warning("JWT payload missing 'email' claim")
-            raise HTTPException(status_code=401, detail="Could not validate credentials (email missing)")
 
-        try:
-            auth_user_id = UUID(auth_user_id_str)
-        except ValueError:
-            logger.warning(f"JWT 'sub' claim is not a valid UUID: {auth_user_id_str}")
-            raise HTTPException(status_code=401, detail="Could not validate credentials (invalid user ID format)")
+async def get_connected_google_connection(
+    principal: AuthenticatedPrincipal = Depends(get_current_user_info),
+    db: AsyncSession = Depends(get_agent_db),
+) -> GoogleConnection:
+    """Resolve one persisted Google account once per FastAPI request."""
+    try:
+        return await load_connected_google_connection(principal.user_id, db)
+    except (
+        CredentialEncryptionUnavailable,
+        GoogleReconnectRequired,
+        GoogleCredentialsUnavailable,
+    ) as exc:
+        raise _credential_http_error(exc) from None
 
-        return {"user_id": auth_user_id, "email": email}  # Return as a dictionary
 
-    except jwt.ExpiredSignatureError:
-        logger.warning("JWT expired")
-        raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
-    except jwt.JWTError as e:
-        logger.error(f"Invalid JWT token: {e}")
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
-    except Exception as e:
-        logger.exception("Error decoding/validating JWT")
-        raise HTTPException(status_code=500, detail="Internal server error during authentication")
-    
-    
-async def get_agent_token_row(
-    user_info: dict = Depends(get_current_user_info),  # <-- Expecting a dictionary now
-    db: AsyncSession = Depends(get_agent_db)
-) -> AgentToken:
-    """
-    Retrieves the AgentToken row for the given auth user ID (UUID).
-    """
-    user_id = user_info["user_id"]  # <-- Access 'user_id' from the dictionary
-    email = user_info["email"]  # <-- Access 'email' from the dictionary
-    
-    row = await db.get(AgentToken, user_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Agent credentials not found for user")
-    
-    return row
+async def _build_service(
+    connection: GoogleConnection,
+    service_name: str,
+    version: str,
+) -> Resource:
+    try:
+        return await build_google_api_service(connection, service_name, version)
+    except GoogleCredentialsUnavailable as exc:
+        raise _credential_http_error(exc) from None
+
 
 async def get_gmail_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('gmail', 'v1', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Gmail service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Gmail service")
+    return await _build_service(connection, "gmail", "v1")
+
 
 async def get_calendar_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('calendar', 'v3', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Calendar service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Calendar service")
+    return await _build_service(connection, "calendar", "v3")
+
 
 async def get_tasks_service(
-    token_row: AgentToken = Depends(get_agent_token_row)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
-    creds = build_credentials(token_row.token_json)
-    try:
-        service = _gmail_builder()('tasks', 'v1', credentials=creds)
-        return service
-    except Exception as e:
-        logger.exception(f"Failed to build Tasks service: {e}")
-        raise HTTPException(status_code=500, detail="Could not initialize Tasks service")
+    return await _build_service(connection, "tasks", "v1")
+
 
 async def get_user_email(
-    gmail_service: Resource = Depends(get_gmail_service)
+    connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> str:
-    try:
-        profile = gmail_service.users().getProfile(userId='me').execute()
-        return profile.get('emailAddress')
-    except Exception as e:
-        logger.exception(f"Error fetching user email: {e}")
-        raise HTTPException(status_code=500, detail="Could not retrieve user email")
+    """Return the persisted, verified Google identity without a provider round trip."""
+    return connection.google_email

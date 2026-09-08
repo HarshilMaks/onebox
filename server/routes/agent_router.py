@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from googleapiclient.discovery import Resource
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents import ExecutiveAgent, GeneralAgent, GeneralAgentStreamer
+from server.database import get_agent_db
 from server.schemas import (
     AgentErrorResponse,
     AgentStreamEvent,
@@ -23,8 +25,17 @@ from server.services.pending_actions import (
     get_pending_action,
     reject_pending_action,
 )
+from server.services.credentials import (
+    CredentialEncryptionUnavailable,
+    GoogleConnection,
+    GoogleCredentialsUnavailable,
+    GoogleReconnectRequired,
+    build_google_api_service,
+    load_connected_google_connection,
+)
 from server.services.setup_google import (
     get_calendar_service,
+    get_connected_google_connection,
     get_current_user_info,
     get_gmail_service,
     get_tasks_service,
@@ -36,6 +47,42 @@ router = APIRouter(tags=["AI Agents"])
 
 class AgentQuery(BaseModel):
     input: str
+
+
+async def _action_provider_services(
+    action: dict,
+    user_id: UUID,
+    db: AsyncSession,
+) -> dict[str, Resource | None]:
+    providers = {
+        "send_email": ("gmail", "v1", "gmail_service"),
+        "send_reply": ("gmail", "v1", "gmail_service"),
+        "create_event": ("calendar", "v3", "calendar_service"),
+        "create_task": ("tasks", "v1", "tasks_service"),
+    }
+    selected = providers.get(action["action_type"])
+    if selected is None:
+        return {
+            "gmail_service": None,
+            "calendar_service": None,
+            "tasks_service": None,
+        }
+
+    try:
+        connection = await load_connected_google_connection(user_id, db)
+        service = await build_google_api_service(connection, selected[0], selected[1])
+    except GoogleReconnectRequired:
+        raise HTTPException(status_code=409, detail="Google account reconnection is required") from None
+    except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable):
+        raise HTTPException(status_code=503, detail="Google credentials are temporarily unavailable") from None
+
+    services: dict[str, Resource | None] = {
+        "gmail_service": None,
+        "calendar_service": None,
+        "tasks_service": None,
+    }
+    services[selected[2]] = service
+    return services
 
 
 @router.get("/actions/{action_id}", response_model=PendingActionResponse)
@@ -53,21 +100,15 @@ async def get_pending_action_endpoint(
 async def approve_pending_action_endpoint(
     action_id: UUID,
     user_info: dict = Depends(get_current_user_info),
-    gmail_service: Resource = Depends(get_gmail_service),
-    calendar_service: Resource = Depends(get_calendar_service),
-    tasks_service: Resource = Depends(get_tasks_service),
+    db: AsyncSession = Depends(get_agent_db),
 ):
     """Approve and execute exactly one immutable action owned by this JWT user."""
     try:
         action, claimed = await claim_pending_action(action_id, user_info["user_id"])
         if not claimed:
             return action
-        return await execute_claimed_action(
-            action,
-            gmail_service=gmail_service,
-            calendar_service=calendar_service,
-            tasks_service=tasks_service,
-        )
+        services = await _action_provider_services(action, user_info["user_id"], db)
+        return await execute_claimed_action(action, **services)
     except PendingActionNotFound:
         raise HTTPException(status_code=404, detail="Action not found")
     except PendingActionInvalidState:
@@ -94,6 +135,7 @@ async def invoke_executive_agent_endpoint(
     gmail_service: Resource = Depends(get_gmail_service),
     calendar_service: Resource = Depends(get_calendar_service),
     tasks_service: Resource = Depends(get_tasks_service),
+    google_connection: GoogleConnection = Depends(get_connected_google_connection),
 ):
     try:
         agent = ExecutiveAgent(user_id=str(user_info["user_id"]))
@@ -102,7 +144,7 @@ async def invoke_executive_agent_endpoint(
             gmail_service=gmail_service,
             calendar_service=calendar_service,
             tasks_service=tasks_service,
-            current_user_email=str(user_info["email"]),
+            current_user_email=google_connection.google_email,
         )
         return {"result": result}
     except HTTPException:
@@ -159,11 +201,12 @@ async def invoke_general_agent_stream_endpoint(
     user_info: dict = Depends(get_current_user_info),
     gmail_service: Resource = Depends(get_gmail_service),
     tasks_service: Resource = Depends(get_tasks_service),
+    google_connection: GoogleConnection = Depends(get_connected_google_connection),
 ):
     """Stream structured, user-safe agent events as JSON SSE data frames."""
     try:
         agent = GeneralAgentStreamer(user_id=str(user_info["user_id"]))
-        user_email = str(user_info["email"])
+        user_email = google_connection.google_email
 
         async def stream_response_generator():
             try:

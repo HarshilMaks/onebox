@@ -1,27 +1,27 @@
-import json
 import logging
 from uuid import UUID
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.config import settings
 from server.database import get_agent_db
 from server.logging_config import setup_logging
 from server.models import AgentToken
-from server.oauth_state import (
-    OAuthStateStoreUnavailable,
-    consume_oauth_state,
-    create_oauth_state,
-    merge_oauth_token_payload,
-    normalize_email,
-)
+from server.oauth_state import OAuthStateStoreUnavailable, consume_oauth_state, create_oauth_state
 from server.schemas import AgentStatusResponse, OAuthStartResponse, VerifyAndCreateEntryResponse
-from server.services.setup_google import _SCOPES, get_client_config, get_current_user_info
+from server.services.credentials import (
+    OAuthAccountMismatch,
+    OAuthConnectionAlreadyExists,
+    OAuthExchangeFailed,
+    create_oauth_authorization_url,
+    create_pending_oauth_connection,
+    exchange_oauth_code,
+    persist_oauth_connection,
+)
+from server.services.setup_google import get_current_user_info
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -54,18 +54,11 @@ async def start_oauth(user_info: dict = Depends(get_current_user_info)):
         logger.error("Unable to create OAuth state for user %s", user_id)
         raise HTTPException(status_code=503, detail="OAuth is temporarily unavailable. Please try again.")
 
-    flow = Flow.from_client_config(
-        get_client_config(),
-        scopes=_SCOPES,
-        redirect_uri=str(settings.OAUTH_REDIRECT_URI),
-    )
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        state=state,
-        prompt="consent",
-        login_hint=str(user_info["email"]),
-    )
+    try:
+        auth_url = await create_oauth_authorization_url(state, str(user_info["email"]))
+    except Exception:
+        logger.error("Unable to create OAuth authorization URL for user %s", user_id)
+        raise HTTPException(status_code=503, detail="OAuth is temporarily unavailable. Please try again.")
     return {"authorization_url": auth_url, "state": state}
 
 
@@ -95,22 +88,8 @@ async def oauth_callback(
         return _frontend_redirect("failure", "Invalid OAuth state")
 
     try:
-        flow = Flow.from_client_config(
-            get_client_config(),
-            scopes=_SCOPES,
-            redirect_uri=str(settings.OAUTH_REDIRECT_URI),
-        )
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-        token_dict = json.loads(creds.to_json())
-
-        userinfo_service = build("oauth2", "v2", credentials=creds)
-        returned_email = userinfo_service.userinfo().get().execute().get("email")
-        if not returned_email:
-            return _frontend_redirect("failure", "Failed to verify the selected Google account")
-
-        normalized_returned_email = normalize_email(returned_email)
-        if normalized_returned_email != state_binding.expected_email:
+        exchange = await exchange_oauth_code(code)
+        if exchange.normalized_google_email != state_binding.expected_email:
             logger.warning("OAuth account did not match the initiating identity for user %s", user_id)
             return _frontend_redirect(
                 "failure",
@@ -118,27 +97,13 @@ async def oauth_callback(
             )
 
         try:
-            async with db.begin():
-                existing = await db.get(AgentToken, user_id)
-                if existing and existing.user_email:
-                    if normalize_email(existing.user_email) != normalized_returned_email:
-                        raise _OAuthAccountMismatch()
-
-                if existing:
-                    existing.token_json = merge_oauth_token_payload(
-                        existing.token_json,
-                        token_dict,
-                    )
-                    existing.user_email = returned_email.strip()
-                else:
-                    db.add(
-                        AgentToken(
-                            user_id=user_id,
-                            user_email=returned_email.strip(),
-                            token_json=token_dict,
-                        )
-                    )
-        except _OAuthAccountMismatch:
+            await persist_oauth_connection(
+                db,
+                user_id=user_id,
+                expected_google_email=state_binding.expected_email,
+                exchange=exchange,
+            )
+        except OAuthAccountMismatch:
             logger.warning("OAuth account did not match the existing connection for user %s", user_id)
             return _frontend_redirect(
                 "failure",
@@ -146,6 +111,9 @@ async def oauth_callback(
             )
 
         return _frontend_redirect("success", user_id=user_id)
+    except OAuthExchangeFailed:
+        logger.warning("OAuth callback exchange failed for user %s", user_id)
+        return _frontend_redirect("failure", "Authentication failed")
     except Exception:
         logger.exception("OAuth callback failed for user %s", user_id)
         return _frontend_redirect("failure", "Authentication failed")
@@ -159,18 +127,10 @@ async def verify_and_create_agent_entry(
     """Create an optional pending token row for the authenticated user."""
     user_id = user_info["user_id"]
     email = str(user_info["email"])
-    existing_entry = await db.get(AgentToken, user_id)
-    if existing_entry:
+    try:
+        await create_pending_oauth_connection(db, user_id)
+    except OAuthConnectionAlreadyExists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Entry already exists")
-
-    db.add(
-        AgentToken(
-            user_id=user_id,
-            user_email=email,
-            token_json={"status": "pending_oauth"},
-        )
-    )
-    await db.commit()
     return {"message": "Entry created successfully", "user_id": str(user_id), "email": email}
 
 
@@ -181,7 +141,7 @@ async def get_agent_status(
 ):
     user_id = user_info["user_id"]
     agent_token = await db.get(AgentToken, user_id)
-    is_connected = bool(agent_token and agent_token.token_json.get("refresh_token"))
+    is_connected = bool(agent_token and agent_token.connection_status == "connected")
     return {
         "user_id": str(user_id),
         "email": str(user_info["email"]),

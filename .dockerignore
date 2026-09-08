@@ -1,0 +1,37 @@
+# Default-deny the build context; only runtime assets are explicitly re-included.
+*
+!Dockerfile
+!requirements.txt
+!alembic.ini
+!agents.py
+!user_config.yaml
+!server/
+!server/**
+!clients/
+!clients/**
+!tools/
+!tools/**
+!alembic/
+!alembic/**
+
+# Defense in depth if future include rules are added.
+.git/
+.github/
+.agents/
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+scripts/
+*.json
+*.pem
+*.key
+*.crt

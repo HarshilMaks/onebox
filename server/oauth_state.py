@@ -2,7 +2,7 @@
 import json
 import secrets
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Optional
 
 import redis
 
@@ -37,17 +37,6 @@ def normalize_email(email: str) -> str:
     if not normalized:
         raise ValueError("Email address must not be blank")
     return normalized
-
-
-def merge_oauth_token_payload(
-    existing_token: Mapping[str, Any] | None,
-    returned_token: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Keep an existing refresh token when a reauthorization omits one."""
-    merged = dict(returned_token)
-    if not merged.get("refresh_token") and existing_token and existing_token.get("refresh_token"):
-        merged["refresh_token"] = existing_token["refresh_token"]
-    return merged
 
 
 def create_oauth_state(user_id: str, expected_email: str) -> str:

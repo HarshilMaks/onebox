@@ -1,34 +1,38 @@
-# Stage 1: Builder - installs dependencies and copies app
-FROM python:3.12-slim AS builder
+# Pin patch releases and update them only through a reviewed dependency/image update.
+FROM python:3.12.8-slim-bookworm AS builder
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN python -m venv "$VIRTUAL_ENV"
+
+WORKDIR /build
+COPY requirements.txt ./
+RUN pip install --require-hashes -r requirements.txt
+
+
+FROM python:3.12.8-slim-bookworm AS runtime
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN groupadd --gid 10001 onebox \
+    && useradd --uid 10001 --gid onebox --create-home --home-dir /app onebox
 
 WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=onebox:onebox server ./server
+COPY --chown=onebox:onebox clients ./clients
+COPY --chown=onebox:onebox tools ./tools
+COPY --chown=onebox:onebox alembic ./alembic
+COPY --chown=onebox:onebox agents.py alembic.ini user_config.yaml ./
 
-# Install build dependencies (if any), e.g. gcc for wheels, but let's keep it minimal here
-# RUN apt-get update && apt-get install -y build-essential
-
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-# Stage 2: Runtime - minimal image with only installed packages and app code
-FROM python:3.12-slim AS runtime
-
-WORKDIR /app
-
-# Copy installed packages from builder (from site-packages)
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy app code
-COPY --from=builder /app /app
-
-# Expose port for FastAPI
+USER 10001:10001
 EXPOSE 8000
 
-ENV PYTHONPATH=/app
-
-# Run uvicorn with reload for development; for production remove --reload flag
-CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--log-config", "server/logging.ini"]
+CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "server/logging.ini"]
