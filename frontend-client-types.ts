@@ -131,10 +131,12 @@ export interface AgentErrorResponse {
 
 /** One event frame from the `/generate-stream/` Server-Sent Events stream.
  *  Each SSE `data:` line is JSON matching this shape. Stop reading after
- *  an `error` or `done` event. */
+ *  an `error` or `done` event. Error events include `error_code` for safe,
+ *  stable client-side branching; `content` is always safe to display. */
 export interface AgentStreamEvent {
   event: "token" | "tool_result" | "error" | "done";
   content: string;
+  error_code?: string;
 }
 
 /** Immutable action prepared by an agent. Only its JWT owner may approve or reject it. */

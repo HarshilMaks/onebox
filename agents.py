@@ -530,23 +530,26 @@ class GeneralAgentStreamer(Agent):
         gmail_service: Optional[Resource] = None,
         tasks_service: Optional[Resource] = None,
         current_user_email: Optional[str] = None,
-        system_prompt: str = GENERAL_AGENT_PROMPT
-    ) -> AsyncGenerator[tuple[str, str], None]:
-        """Yields (event_type, content) pairs.
+        system_prompt: str = GENERAL_AGENT_PROMPT,
+    ) -> AsyncGenerator[tuple[str, str, Optional[str]], None]:
+        """Yield ``(event_type, content, error_code)`` stream events.
 
-        event_type is one of:
-          - "token": a chunk of model-generated text
-          - "tool_result": text generated after a tool call completed
-          - "error": a user-safe error message; the stream ends after this
+        Error messages are deliberately safe for client display. Detailed provider
+        and tool exceptions remain in server logs, while ``error_code`` gives
+        clients a stable machine-readable reason for the terminal event.
         """
-        logger.debug(f"GeneralAgentStreamer user: {self.user_id}, model: {self.model_name}, query: {input_query[:50]}")
-        
+        logger.debug(
+            "GeneralAgentStreamer user: %s, model: %s, query: %s",
+            self.user_id,
+            self.model_name,
+            input_query[:50],
+        )
+
         tool_objects_for_api = self._prepare_tool_objects_and_python_callables(
             gmail_service, tasks_service, current_user_email
         )
-        
         history: List[Content] = [Content(parts=[Part(text=input_query)], role="user")]
-        
+
         system_instruction_content = None
         if system_prompt:
             system_instruction_content = Content(parts=[Part(text=system_prompt)])
@@ -554,51 +557,43 @@ class GeneralAgentStreamer(Agent):
         gen_config = GenerateContentConfig(
             temperature=0.0,
             tools=tool_objects_for_api if tool_objects_for_api else None,
-            system_instruction=system_instruction_content
+            system_instruction=system_instruction_content,
         )
-        
+
         try:
             stream_iterator = self.client.models.generate_content_stream(
                 model=self.model_name,
                 contents=history,
                 config=gen_config,
             )
-            
+
             full_function_call_parts = []
-            active_function_call_name = None # This is less precise for multiple calls, might need re-evaluation for streaming multiple tools
+            active_function_call_name = None
 
             for chunk in stream_iterator:
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     for part in chunk.candidates[0].content.parts:
                         if part.function_call:
-                            logger.info(f"Stream chunk contains function call part: {part.function_call.name}")
-                            # For streaming, we accumulate all function call parts
+                            logger.info("Stream chunk contains a function call")
                             full_function_call_parts.append(part)
-                            # The 'active_function_call_name' tracking for single tool execution is less ideal here
-                            # but for simplicity, we'll assume the model generally provides single calls in streaming unless tested otherwise.
-                            active_function_call_name = part.function_call.name 
-                            continue 
+                            active_function_call_name = part.function_call.name
+                            continue
 
-                if not active_function_call_name and not full_function_call_parts: # Only yield text if no function call parts are being accumulated
-                    chunk_text = getattr(chunk, 'text', None)
+                if not active_function_call_name and not full_function_call_parts:
+                    chunk_text = getattr(chunk, "text", None)
                     if chunk_text:
-                        yield "token", chunk_text
-                
+                        yield "token", chunk_text, None
+
                 await asyncio.sleep(0)
 
-            # After the stream finishes, if there were any accumulated function calls
             if full_function_call_parts:
-                # Merge arguments from all parts of a streamed function call
-                # Note: This logic assumes that if there are multiple parts, they are for a *single* function call
-                # that was broken across chunks. If the model starts attempting *multiple distinct functions*
-                # in a single streaming turn, this logic will need to be refined.
                 final_fc_name = full_function_call_parts[0].function_call.name
                 merged_args = {}
                 for fc_part_item in full_function_call_parts:
                     if fc_part_item.function_call and fc_part_item.function_call.args:
                         merged_args.update(dict(fc_part_item.function_call.args))
 
-                logger.info(f"Executing function call after stream: {final_fc_name} with args: {merged_args}")
+                logger.info("Executing streamed function call %s", final_fc_name)
 
                 if final_fc_name in self.available_python_tools:
                     python_function_to_call = self.available_python_tools[final_fc_name]
@@ -607,33 +602,44 @@ class GeneralAgentStreamer(Agent):
                             api_response = await python_function_to_call(**merged_args)
                         else:
                             api_response = await asyncio.to_thread(python_function_to_call, **merged_args)
-                        
+
                         if not isinstance(api_response, (dict, str, bool, int, float, list, type(None))):
                             api_response = str(api_response)
 
                         function_response_part_obj = Part(
                             function_response={"name": final_fc_name, "response": {"result": api_response}}
                         )
-                        
-                        # Append the combined model's function call turn and the tool response
-                        history.append(Content(parts=full_function_call_parts, role="model")) 
+                        history.append(Content(parts=full_function_call_parts, role="model"))
                         history.append(Content(parts=[function_response_part_obj], role="tool"))
 
-                        # Request a new turn from the model with the tool response
                         final_stream_iterator = self.client.models.generate_content_stream(
                             model=self.model_name,
                             contents=history,
-                            config=gen_config, 
+                            config=gen_config,
                         )
                         for final_chunk in final_stream_iterator:
-                            final_chunk_text = getattr(final_chunk, 'text', None)
+                            final_chunk_text = getattr(final_chunk, "text", None)
                             if final_chunk_text:
-                                yield "tool_result", final_chunk_text
+                                yield "tool_result", final_chunk_text, None
                             await asyncio.sleep(0)
-                    except Exception as e_fc:
-                        yield "error", f"Couldn't execute tool '{final_fc_name}': {e_fc}"
+                    except Exception:
+                        logger.exception("Streamed tool execution failed for %s", final_fc_name)
+                        yield (
+                            "error",
+                            "The requested tool could not complete. Please try again.",
+                            "tool_execution_failed",
+                        )
                 else:
-                    yield "error", f"Unknown function '{final_fc_name}' was requested after streaming."
-        except Exception as e:
-            logger.error(f"[GeneralAgentStreamer Error] User {self.user_id}: {e}", exc_info=True)
-            yield "error", str(e)
+                    logger.warning("Streamed function call was not declared: %s", final_fc_name)
+                    yield (
+                        "error",
+                        "The agent requested an unavailable tool.",
+                        "unknown_tool_requested",
+                    )
+        except Exception:
+            logger.exception("General agent stream failed for user %s", self.user_id)
+            yield (
+                "error",
+                "The agent could not complete the stream. Please try again.",
+                "agent_stream_failed",
+            )

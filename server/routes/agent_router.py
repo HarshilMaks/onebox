@@ -9,7 +9,12 @@ from googleapiclient.discovery import Resource
 from pydantic import BaseModel
 
 from agents import ExecutiveAgent, GeneralAgent, GeneralAgentStreamer
-from server.schemas import AgentErrorResponse, AgentSuccessResponse, PendingActionResponse
+from server.schemas import (
+    AgentErrorResponse,
+    AgentStreamEvent,
+    AgentSuccessResponse,
+    PendingActionResponse,
+)
 from server.services.pending_actions import (
     PendingActionInvalidState,
     PendingActionNotFound,
@@ -134,6 +139,20 @@ async def invoke_general_agent_endpoint(
         )
 
 
+def _format_stream_event(
+    event: str,
+    content: str,
+    error_code: str | None = None,
+) -> str:
+    """Serialize one safe, structured Server-Sent Event data frame."""
+    payload = AgentStreamEvent(
+        event=event,
+        content=content,
+        error_code=error_code,
+    ).model_dump(exclude_none=True)
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 @router.post("/generate-stream/")
 async def invoke_general_agent_stream_endpoint(
     query: AgentQuery,
@@ -141,26 +160,30 @@ async def invoke_general_agent_stream_endpoint(
     gmail_service: Resource = Depends(get_gmail_service),
     tasks_service: Resource = Depends(get_tasks_service),
 ):
-    """Stream agent events as JSON payloads in Server-Sent Event data frames."""
+    """Stream structured, user-safe agent events as JSON SSE data frames."""
     try:
         agent = GeneralAgentStreamer(user_id=str(user_info["user_id"]))
         user_email = str(user_info["email"])
 
         async def stream_response_generator():
             try:
-                async for event_type, content in agent.run(
+                async for event_type, content, error_code in agent.run(
                     input_query=query.input,
                     gmail_service=gmail_service,
                     tasks_service=tasks_service,
                     current_user_email=user_email,
                 ):
-                    yield f"data: {json.dumps({'event': event_type, 'content': content})}\n\n"
+                    yield _format_stream_event(event_type, content, error_code)
                     if event_type == "error":
                         return
-                yield f"data: {json.dumps({'event': 'done', 'content': ''})}\n\n"
+                yield _format_stream_event("done", "")
             except Exception:
                 logger.exception("Error while streaming agent response for user %s", user_info.get("user_id"))
-                yield f"data: {json.dumps({'event': 'error', 'content': 'The agent stream failed unexpectedly.'})}\n\n"
+                yield _format_stream_event(
+                    "error",
+                    "The agent stream failed unexpectedly.",
+                    "stream_execution_failed",
+                )
 
         return StreamingResponse(stream_response_generator(), media_type="text/event-stream")
     except HTTPException:

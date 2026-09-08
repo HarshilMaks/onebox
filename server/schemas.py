@@ -65,6 +65,18 @@ class AgentSuccessResponse(BaseModel):
     result: str
 
 
+class AgentStreamEvent(BaseModel):
+    """One JSON payload emitted in a general-agent SSE data frame.
+
+    ``error_code`` is present only for a terminal ``error`` event and is safe
+    for client-side branching. ``content`` is always safe to display.
+    """
+
+    event: str
+    content: str
+    error_code: Optional[str] = None
+
+
 class AgentErrorResponse(BaseModel):
     """Standard envelope for a failed agent request.
 
