@@ -147,7 +147,7 @@ def test_settings_environment_file_bootstraps_google_adc(settings_class, monkeyp
 
 
 def test_production_requires_secure_redirects_and_a_strong_secret(settings_class):
-    with pytest.raises(ValidationError, match="SECRET_KEY must be at least 32 characters"):
+    with pytest.raises(ValidationError, match="SECRET_KEY must be at least 32 bytes for HS256"):
         build_settings(
             settings_class,
             ENVIRONMENT="production",

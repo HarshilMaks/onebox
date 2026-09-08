@@ -128,7 +128,10 @@ class Settings(BaseSettings):
     def require_nonblank_string(cls, value: object, info) -> str:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{info.field_name} must be configured")
-        return value.strip()
+        normalized = value.strip()
+        if info.field_name == "SECRET_KEY" and len(normalized.encode("utf-8")) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 bytes for HS256")
+        return normalized
 
     @field_validator(
         "PUBSUB_TOPIC",
@@ -256,8 +259,6 @@ class Settings(BaseSettings):
                 )
 
         if self.ENVIRONMENT is Environment.PRODUCTION:
-            if len(self.SECRET_KEY) < 32:
-                raise ValueError("SECRET_KEY must be at least 32 characters in production")
             for setting_name, url in (
                 ("OAUTH_REDIRECT_URI", self.OAUTH_REDIRECT_URI),
                 ("FRONTEND_OAUTH_CALLBACK_URI", self.FRONTEND_OAUTH_CALLBACK_URI),
