@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     PUBSUB_PUSH_AUDIENCE: str = ""
     PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL: str = ""
 
+    # Comma-separated browser origins permitted to call the API cross-origin.
+    # An empty value intentionally disables cross-origin access.
+    CORS_ALLOWED_ORIGINS: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -1,21 +1,52 @@
-from server.logging_config import setup_logging
-import logging  
+from contextlib import asynccontextmanager
+import logging
+from urllib.parse import urlsplit
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
-# Import routers
-from server.routes import agent_oauth, google_mail, push_router, agent_router
-# Import services
-from server.services.mail import initialize_gmail_service, stop_gmail_watch, get_gmail_service_instance
+from server.config import settings
+from server.logging_config import setup_logging
+from server.routes import agent_oauth, agent_router, google_mail, push_router
 from server.schemas import ReadinessResponse
-from dotenv import load_dotenv
-# Load environment variables
-load_dotenv()
+from server.services.mail import (
+    get_gmail_service_instance,
+    initialize_gmail_service,
+    stop_gmail_watch,
+)
 
-# Configure logging
+load_dotenv()
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def get_cors_allowed_origins(raw_origins: str) -> list[str]:
+    """Parse a comma-separated allowlist of exact HTTP(S) browser origins."""
+    origins: list[str] = []
+    for raw_origin in raw_origins.split(","):
+        origin = raw_origin.strip().rstrip("/")
+        if not origin:
+            continue
+        try:
+            parsed = urlsplit(origin)
+        except ValueError:
+            logger.warning("Ignoring invalid configured CORS origin")
+            continue
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            logger.warning("Ignoring invalid configured CORS origin")
+            continue
+        if origin not in origins:
+            origins.append(origin)
+    return origins
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,13 +79,16 @@ app = FastAPI(
     debug=False
 )
 
-# Add CORS middleware
+cors_allowed_origins = get_cors_allowed_origins(settings.CORS_ALLOWED_ORIGINS)
+if not cors_allowed_origins:
+    logger.warning("No valid CORS origins configured; cross-origin browser access is disabled")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_allowed_origins,
+    allow_credentials=bool(cors_allowed_origins),
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 @app.get("/", response_model=ReadinessResponse)
