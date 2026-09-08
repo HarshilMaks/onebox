@@ -18,21 +18,44 @@ redis_client = redis.StrictRedis(
 )
 
 
-def cache_set(key: str, value: dict, ttl: int = 300):
-    redis_client.setex(key, ttl, json.dumps(value))
+def cache_set(key: str, value: dict, ttl: int = 300) -> bool:
+    """Best-effort cache write that never makes a mail request fail."""
+    try:
+        redis_client.setex(key, ttl, json.dumps(value))
+        return True
+    except (redis.RedisError, TypeError, ValueError):
+        logger.warning("Mail cache write failed", exc_info=True)
+        return False
 
 
 def cache_get(key: str):
-    data = redis_client.get(key)
-    return json.loads(data) if data else None
+    """Return a cached mail object or treat unavailable/corrupt data as a miss."""
+    try:
+        data = redis_client.get(key)
+        if not data:
+            return None
+        value = json.loads(data)
+        if not isinstance(value, dict):
+            logger.warning("Mail cache entry has an unexpected shape")
+            return None
+        return value
+    except (redis.RedisError, TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("Mail cache read failed", exc_info=True)
+        return None
 
 
-def cache_delete(key: str):
-    redis_client.delete(key)
+def cache_delete(key: str) -> bool:
+    """Best-effort cache delete that never makes a mail mutation fail."""
+    try:
+        redis_client.delete(key)
+        return True
+    except redis.RedisError:
+        logger.warning("Mail cache delete failed", exc_info=True)
+        return False
 
 
-def invalidate_user_mail_cache(user_id: str, email_id: str) -> None:
-    """Remove cached detail, list, and search data affected by a mail mutation."""
+def invalidate_user_mail_cache(user_id: str, email_id: str) -> bool:
+    """Best-effort removal of cache entries affected by a mail mutation."""
     patterns = (
         f"user:{user_id}:email_v*:{email_id}",
         f"user:{user_id}:emails_v*",
@@ -47,6 +70,7 @@ def invalidate_user_mail_cache(user_id: str, email_id: str) -> None:
         ]
         if keys:
             redis_client.delete(*keys)
+        return True
     except redis.RedisError:
         logger.warning(
             "Mail cache invalidation failed for user %s and message %s",
@@ -54,3 +78,4 @@ def invalidate_user_mail_cache(user_id: str, email_id: str) -> None:
             email_id,
             exc_info=True,
         )
+        return False
