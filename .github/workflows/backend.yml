@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       ENVIRONMENT: test
+      PYTHONPATH: ${{ github.workspace }}
       SERVICE_ROLE: api
       AUTOMATION_ENABLED: "false"
       DATABASE_URL: postgresql+asyncpg://onebox:test-password@localhost:5432/onebox
