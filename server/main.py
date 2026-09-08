@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Gmail AI Agent service...")
     gmail_service = get_gmail_service_instance()
     if gmail_service:
-        stop_gmail_watch(gmail_service)
+        await stop_gmail_watch(gmail_service)
     logger.info("Gmail AI Agent service stopped")
 
 # Create the FastAPI app with lifespan handler

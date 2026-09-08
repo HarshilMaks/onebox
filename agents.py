@@ -185,9 +185,11 @@ class ExecutiveAgent(Agent):
         calendar_service: Optional[Resource] = None,
         tasks_service: Optional[Resource] = None,
         current_user_email: Optional[str] = None,
+        allow_tools: bool = True,
     ) -> List[Tool]:
-        
         self.available_python_tools = {}
+        if not allow_tools:
+            return []
         function_declarations_for_tool_config = []
 
         if gmail_service and current_user_email:
@@ -231,6 +233,7 @@ class ExecutiveAgent(Agent):
         calendar_service: Optional[Resource] = None,
         tasks_service: Optional[Resource] = None,
         current_user_email: Optional[str] = None,
+        allow_tools: bool = True,
     ) -> str:
         now = datetime.datetime.now()
         tomorrow_date = now + datetime.timedelta(days=1)
@@ -285,7 +288,11 @@ class ExecutiveAgent(Agent):
         logger.debug(f"ExecutiveAgent user: {self.user_id}, model: {self.model_name}, query: {input_query[:50]}")
         
         tool_objects_for_api = self._prepare_tool_objects_and_python_callables(
-            gmail_service, calendar_service, tasks_service, current_user_email
+            gmail_service,
+            calendar_service,
+            tasks_service,
+            current_user_email,
+            allow_tools,
         )
 
         system_instruction_content = None

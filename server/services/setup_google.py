@@ -33,9 +33,9 @@ def get_client_config():
     with open(settings.GOOGLE_OAUTH_CLIENT_SECRETS, 'r') as f:
         return json.load(f)
 
-def build_credentials(token_info: dict) -> Credentials:
+def build_credentials(token_info: dict, refresh_if_expired: bool = True) -> Credentials:
     creds = Credentials.from_authorized_user_info(token_info, _SCOPES)
-    if creds.expired and creds.refresh_token:
+    if refresh_if_expired and creds.expired and creds.refresh_token:
         logger.info("Refreshing expired credentials for user")
         creds.refresh(Request())
     return creds

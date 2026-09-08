@@ -8,8 +8,9 @@ from server.logging_config import setup_logging
 from server.services.mail import (
     fetch_and_process_email,        # Async
     get_gmail_service_instance,     # Synchronous, returns global GMAIL_SERVICE
-    setup_gmail_watch,              # Synchronous
+    setup_gmail_watch,              # Async
     process_email_notification,     # Async
+    execute_google_request,
     extract_and_decode_message,     # Synchronous
 )
 from server.schemas import GlobalGmailHealthResponse
@@ -102,8 +103,7 @@ async def renew_watch(
     """
     try:
         logger.info("Attempting to manually renew Gmail watch...")
-        # setup_gmail_watch is synchronous
-        watch_response = setup_gmail_watch(gmail_service) 
+        watch_response = await setup_gmail_watch(gmail_service)
         
         if watch_response and watch_response.get('expiration'):
             expiration_time = watch_response.get('expiration')
@@ -129,12 +129,12 @@ async def check_inbox(
     """
     try:
         logger.info("Manually checking inbox for unread emails...")
-        # This list call is synchronous
-        results = gmail_service.users().messages().list(
-            userId='me', # 'me' refers to AGENT_USER_ID_FOR_SERVICE
-            q='is:unread in:inbox -category:promotions -category:social -from:noreply', # Added filter similar to process_email_notification
-            maxResults=10 # Process up to 10 at a time for manual check
-        ).execute()
+        request = gmail_service.users().messages().list(
+            userId='me',
+            q='is:unread in:inbox -category:promotions -category:social -from:noreply',
+            maxResults=10,
+        )
+        results = await execute_google_request(request)
         
         messages = results.get('messages', [])
         
@@ -147,7 +147,7 @@ async def check_inbox(
         for message_summary in messages:
             message_id = message_summary['id']
             processed_ids.append(message_id)
-            # fetch_and_process_email is synchronous but run in background
+            # fetch_and_process_email is async and is awaited by BackgroundTasks
             background_tasks.add_task(
                 fetch_and_process_email,
                 gmail_service, # Pass the active service
