@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -11,9 +13,9 @@ from server.database import close_database
 from server.integrations.google import close_google_adapter
 from server.integrations.llm import close_llm_adapter
 from server.integrations.redis import close_redis_adapter
-from server.logging_config import setup_logging
+from server.logging_config import bind_correlation_id, reset_correlation_id, setup_logging
 from server.routes import agent_oauth, agent_router, google_mail, push_router
-from server.schemas import ReadinessResponse
+from server.schemas import PublicErrorResponse, ReadinessResponse
 from server.services.readiness import readiness_status
 from server.workers.mail_notifications import run_notification_worker
 
@@ -61,6 +63,69 @@ app = FastAPI(
     lifespan=lifespan,
     debug=False,
 )
+
+_STATUS_ERROR_CODES = {
+    400: "invalid_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+    413: "payload_too_large",
+    422: "validation_error",
+    429: "too_many_requests",
+    502: "provider_error",
+    503: "service_unavailable",
+    504: "request_timeout",
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_request: Request, _error: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content=PublicErrorResponse(
+            error="validation_error",
+            detail="Request validation failed.",
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_error_handler(_request: Request, error: HTTPException):
+    if isinstance(error.detail, dict) and {"error", "detail"}.issubset(error.detail):
+        content = error.detail
+    else:
+        content = PublicErrorResponse(
+            error=_STATUS_ERROR_CODES.get(error.status_code, "request_failed"),
+            detail="Request could not be completed.",
+        ).model_dump()
+    return JSONResponse(status_code=error.status_code, content=content, headers=error.headers)
+
+
+@app.exception_handler(Exception)
+async def internal_error_handler(_request: Request, _error: Exception):
+    logger.exception("Unhandled HTTP request failure")
+    return JSONResponse(
+        status_code=500,
+        content=PublicErrorResponse(
+            error="internal_error",
+            detail="Request could not be completed.",
+        ).model_dump(),
+    )
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    supplied = request.headers.get("X-Request-ID", "")
+    correlation_id = supplied if supplied.isascii() and 1 <= len(supplied) <= 64 else str(uuid4())
+    token = bind_correlation_id(f"request:{correlation_id}")
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = correlation_id
+        return response
+    finally:
+        reset_correlation_id(token)
+
 
 cors_allowed_origins = list(settings.cors_allowed_origins)
 if not cors_allowed_origins:

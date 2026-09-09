@@ -14,10 +14,8 @@ from server.services.pending_actions import (
     create_pending_action,
     resolve_reply_target,
 )
-from tools.logging_config import setup_logging
 from tools.utils import create_raw_message, format_datetime_with_timezone
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
 

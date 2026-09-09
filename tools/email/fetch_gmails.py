@@ -12,10 +12,8 @@ from pydantic import ValidationError
 # Project imports - corrected paths based on previous refactoring
 from tools.email.gmail_models import EmailData
 from tools.utils import extract_message_body, parse_email_time, get_header_value
-from tools.logging_config import setup_logging
 
 # Configure logging
-setup_logging()
 logger = logging.getLogger(__name__)
 
 def fetch_emails(

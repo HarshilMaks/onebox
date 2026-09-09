@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
@@ -6,7 +6,6 @@ from email.mime.text import MIMEText
 import base64
 import hashlib
 import logging
-from server.logging_config import setup_logging
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from server.services.setup_google import get_current_user_info, get_gmail_service
@@ -47,7 +46,6 @@ async def _gmail_execute(service: Resource, request: Any) -> Any:
         raise _mail_provider_error(exc) from None
 
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mail", tags=["Email-Operations"])
@@ -298,9 +296,9 @@ async def search_emails(
 # ---------- Endpoints ----------
 @router.get("/emails", response_model=EmailPage)
 async def fetch_emails(
-    folder: str = Query("inbox", description="Folder: inbox, sent, spam, trash, starred, all"),
-    limit: int = Query(20, ge=1, description="Max number of emails per page"),
-    page_token: str = Query(None, description="Token for pagination"),
+    folder: str = Query("inbox", min_length=1, max_length=32, description="Folder: inbox, sent, spam, trash, starred, all"),
+    limit: int = Query(20, ge=1, le=100, description="Max number of emails per page"),
+    page_token: str | None = Query(default=None, min_length=1, max_length=512, description="Token for pagination"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -388,7 +386,7 @@ async def fetch_emails(
 
 @router.get("/emails/{email_id}", response_model=EmailDetail)
 async def fetch_email_by_id(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -425,7 +423,7 @@ async def fetch_email_by_id(
 # Example for mark_as_read:
 @router.post("/emails/{email_id}/read", response_model=MailMutationResponse)
 async def mark_as_read(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -448,7 +446,7 @@ async def mark_as_read(
 
 @router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
 async def mark_as_unread(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -475,7 +473,7 @@ async def mark_as_unread(
 
 @router.post("/emails/{email_id}/trash", response_model=MailMutationResponse)
 async def move_to_trash(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -497,7 +495,7 @@ async def move_to_trash(
 
 @router.post("/emails/{email_id}/restore", response_model=MailMutationResponse)
 async def restore_from_trash(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -520,7 +518,7 @@ async def restore_from_trash(
 
 @router.delete("/emails/{email_id}", response_model=MailMutationResponse)
 async def delete_email(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -542,7 +540,7 @@ async def delete_email(
 
 @router.post("/emails/{email_id}/star", response_model=MailMutationResponse)
 async def toggle_star(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     # star_status: bool, # If you want to set specific status, not just toggle
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
@@ -673,8 +671,8 @@ async def save_draft_api( # Renamed
 
 @router.get("/search", response_model=List[EmailListItem])
 async def search_endpoint(
-    q: str = Query(..., description="Gmail search query string"),
-    limit: int = Query(20, ge=1, description="Max number of results to return"), # Reduced default for search
+    q: str = Query(..., min_length=1, max_length=512, description="Gmail search query string"),
+    limit: int = Query(20, ge=1, le=100, description="Max number of results to return"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):

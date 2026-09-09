@@ -1,10 +1,8 @@
 import logging
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
-from tools.logging_config import setup_logging
 
 # Configure logging
-setup_logging()
 logger = logging.getLogger(__name__)
 
 def get_task_list_by_title(

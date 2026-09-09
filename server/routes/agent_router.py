@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from googleapiclient.discovery import Resource
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents import ExecutiveAgent, GeneralAgent, GeneralAgentStreamer
@@ -56,7 +56,7 @@ router = APIRouter(tags=["AI Agents"])
 
 
 class AgentQuery(BaseModel):
-    input: str
+    input: str = Field(min_length=1, max_length=8_000)
 
 
 def _agent_provider_http_error(error: Exception) -> HTTPException:

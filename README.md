@@ -347,3 +347,13 @@ onebox/
 ├── Makefile                 # Common developer workflow targets
 └── user_config.yaml         # User profile, triage rules, & preferences
 ```
+
+### Ingress limits
+
+The API rejects oversized or malformed request data before provider dispatch: agent
+prompts are capped at 8,000 characters; Gmail search queries at 512 characters;
+mail page sizes at 100; OAuth callback code/state values at 4,096/512 characters;
+and Pub/Sub envelopes at `PUBSUB_MAX_ENVELOPE_BYTES` (65,536 bytes by default).
+Recipient lists, subjects, bodies, page tokens, and provider IDs are also bounded.
+Enforce request-rate limits at the authenticated deployment gateway/ingress; the
+application does not implement a second, divergent in-process rate limiter.

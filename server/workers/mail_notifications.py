@@ -13,6 +13,7 @@ from server.config import settings
 from server.database import AsyncSessionLocal
 from server.integrations.google import GoogleOperationRejected, GoogleProviderError, execute_google_request
 from server.integrations.llm import LlmOperationInternal, LlmOperationTimeout, LlmOperationUnavailable
+from server.logging_config import bind_correlation_id, reset_correlation_id
 from server.services.credentials import (
     CredentialEncryptionUnavailable,
     GoogleCredentialsUnavailable,
@@ -397,12 +398,15 @@ async def run_notification_worker(stop_event: asyncio.Event, owner_id: UUID) -> 
             await renew_automation_watch(owner_id)
             claim = await claim_notification_job()
             if claim is not None:
+                correlation_token = bind_correlation_id(f"job:{claim.id}")
                 try:
                     await process_notification_job(claim)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.exception("Unexpected notification worker failure for job %s", claim.id)
+                finally:
+                    reset_correlation_id(correlation_token)
                 continue
         except asyncio.CancelledError:
             raise

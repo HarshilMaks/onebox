@@ -8,7 +8,6 @@ from google.oauth2 import id_token
 
 from server.config import settings
 from server.integrations.google import GoogleProviderError, google_auth_request, run_google_operation
-from server.logging_config import setup_logging
 from server.schemas import GlobalGmailHealthResponse
 from server.services.credentials import (
     CredentialEncryptionUnavailable,
@@ -25,7 +24,6 @@ from server.services.notification_jobs import (
 from server.services.setup_google import get_current_user_info
 from server.workers.mail_notifications import renew_automation_watch
 
-setup_logging()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mail", tags=["mail"])
 

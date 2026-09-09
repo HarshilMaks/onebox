@@ -1,12 +1,10 @@
 from tools.setup_tools import get_credentials, get_gmail_service
 from googleapiclient.discovery import Resource
-from server.logging_config import setup_logging
 import logging
 from fastapi import HTTPException
 
 
 # Configure logging
-setup_logging()
 logger = logging.getLogger(__name__)
 
 # ---------- Dependencies ----------

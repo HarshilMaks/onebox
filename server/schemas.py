@@ -29,10 +29,10 @@ class EmailDetail(EmailListItem):
 
 
 class EmailDraft(BaseModel):
-    to: List[EmailStr]
-    subject: str
-    body: str
-    draft_id: Optional[str] = None
+    to: List[EmailStr] = Field(min_length=1, max_length=50)
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=20_000)
+    draft_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
 
 
 class EmailPage(BaseModel):
@@ -41,8 +41,8 @@ class EmailPage(BaseModel):
 
 
 class OAuthCallback(BaseModel):
-    code: str
-    state: str | None = None
+    code: str = Field(min_length=1, max_length=4_096)
+    state: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class TokenInfo(BaseModel):
@@ -78,15 +78,14 @@ class AgentStreamEvent(BaseModel):
 
 
 class AgentErrorResponse(BaseModel):
-    """Standard envelope for a failed agent request.
-
-    `error` is a short, stable machine-readable code; `detail` is a
-    human-readable message safe to show to a client. Internal exception
-    text is never placed directly in `detail`.
-    """
+    """Standard envelope for failed agent requests."""
 
     error: str
     detail: str
+
+
+class PublicErrorResponse(AgentErrorResponse):
+    """Stable safe HTTP error envelope shared by all routes."""
 
 
 class MailMutationResponse(BaseModel):

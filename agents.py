@@ -314,7 +314,7 @@ class ExecutiveAgent(Agent):
                                                    user_response_preferences=user_response_preferences)}"
         )
 
-        logger.debug(f"ExecutiveAgent user: {self.user_id}, model: {self.model_name}, query: {input_query[:50]}")
+        logger.debug("Executive agent request received")
         
         tool_objects_for_api = self._prepare_tool_objects_and_python_callables(
             gmail_service,
@@ -369,7 +369,7 @@ class ExecutiveAgent(Agent):
                     # any hallucinated/supplied value before adding the server key.
                     args.pop("command_key", None)
 
-                    logger.info(f"LLM requested function call: {function_name} with args: {args}")
+                    logger.info("LLM requested function call")
 
                     if function_name in self.available_python_tools:
                         python_function_to_call = self.available_python_tools[function_name]
@@ -485,7 +485,7 @@ class ExecutiveAgent(Agent):
                     final_text = "No textual response from LLM after processing."
                     if candidate.finish_reason:
                         final_text += f" (Finish reason: {candidate.finish_reason.name})"
-                logger.debug(f"ExecutiveAgent final LLM response: {final_text[:100]}...")
+                logger.debug("Executive agent received final response")
                 return final_text
         
         logger.warning("Max function call turns reached for ExecutiveAgent.")
@@ -502,7 +502,7 @@ class GeneralAgent(Agent):
         input_query: str,
         system_prompt: str = EMAIL_AGENT_PROMPT
     ) -> str:
-        logger.debug(f"GeneralAgent user: {self.user_id}, model: {self.model_name}, query: {input_query[:50]}")
+        logger.debug("General agent request received")
         
         history: List[Content] = [Content(parts=[Part(text=input_query)], role="user")]
         
@@ -527,8 +527,8 @@ class GeneralAgent(Agent):
                 final_text = "".join(text_parts)
 
             return final_text if final_text is not None else str(response)
-        except Exception as e:
-            logger.error(f"[GeneralAgent Error] User {self.user_id}: {e}", exc_info=True)
+        except Exception:
+            logger.exception("General agent execution failed")
             # Re-raise rather than returning an "Error: ..." string as if it
             # were a successful result. The caller (route) is responsible for
             # mapping this to a proper error response.

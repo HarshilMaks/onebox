@@ -10,10 +10,8 @@ from tools.email.fetch_gmails import fetch_emails
 # Project imports - corrected path
 from tools.utils import create_raw_message, create_raw_reply_message, get_header_value
 
-from tools.logging_config import setup_logging
 
 # Configure logging
-setup_logging()
 logger = logging.getLogger(__name__)
 
 def send_new_email(
