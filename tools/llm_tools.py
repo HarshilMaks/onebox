@@ -42,6 +42,8 @@ async def create_event(
     description: str = "",
     location: str = "",
     attendee_emails: Optional[List[str]] = None,
+    *,
+    command_key: str,
 ) -> Dict[str, object]:
     """Create a server-owned approval request; this tool never creates an event."""
     payload = {
@@ -53,16 +55,23 @@ async def create_event(
         "location": location,
         "attendee_emails": sorted(attendee_emails or []),
     }
-    action = await create_pending_action(user_id, ACTION_CREATE_EVENT, payload)
+    action = await create_pending_action(user_id, ACTION_CREATE_EVENT, payload, command_key=command_key)
     return _action_request_response(action)
 
 
-async def create_task(user_id: str, title: str, notes: str) -> Dict[str, object]:
+async def create_task(
+    user_id: str,
+    title: str,
+    notes: str,
+    *,
+    command_key: str,
+) -> Dict[str, object]:
     """Create a server-owned approval request; this tool never creates a task."""
     action = await create_pending_action(
         user_id,
         ACTION_CREATE_TASK,
         {"title": title, "notes": notes},
+        command_key=command_key,
     )
     return _action_request_response(action)
 
@@ -73,6 +82,8 @@ async def send_email(
     recipient_email: str,
     subject: str,
     email_body: str,
+    *,
+    command_key: str,
 ) -> Dict[str, object]:
     """Create a server-owned approval request; this tool never sends email."""
     action = await create_pending_action(
@@ -84,6 +95,7 @@ async def send_email(
             "subject": subject,
             "email_body": email_body,
         },
+        command_key=command_key,
     )
     return _action_request_response(action)
 
@@ -95,12 +107,14 @@ async def send_reply_to_user(
     recipient_email: str,
     subject_filter: str,
     reply_message: str,
+    *,
+    command_key: str,
 ) -> Dict[str, object]:
     """Resolve a reply target now, then create a server-owned approval request."""
     if not gmail_service:
         raise ValueError("Gmail service is required to resolve the reply target.")
 
-    original_message_id = await resolve_reply_target(
+    frozen_target = await resolve_reply_target(
         gmail_service,
         recipient_email,
         subject_filter,
@@ -110,11 +124,10 @@ async def send_reply_to_user(
         ACTION_SEND_REPLY,
         {
             "sender_email": current_user_email,
-            "recipient_email": recipient_email,
-            "subject_filter": subject_filter,
-            "original_message_id": original_message_id,
+            **frozen_target,
             "reply_message": reply_message,
         },
+        command_key=command_key,
     )
     return _action_request_response(action)
 

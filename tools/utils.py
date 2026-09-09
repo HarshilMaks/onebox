@@ -5,7 +5,7 @@ import email.utils
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Mapping, Optional
 
 import pytz
 from dateutil import parser
@@ -80,7 +80,17 @@ def parse_email_time(date_header: str) -> Optional[datetime]:
         logger.error(f"Error parsing time string '{date_header}': {e}")
         return None
 
-def create_raw_message(sender: str, to: List[str], subject: str, message_text: str, cc: List[str] = None, bcc: List[str] = None) -> Dict[str, str]:
+def create_raw_message(
+    sender: str,
+    to: List[str],
+    subject: str,
+    message_text: str,
+    cc: List[str] = None,
+    bcc: List[str] = None,
+    *,
+    message_id: Optional[str] = None,
+    extra_headers: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
     """Creates a new MIME email message and returns it base64 encoded."""
     message = MIMEMultipart()
     message['to'] = ", ".join(to)
@@ -90,7 +100,9 @@ def create_raw_message(sender: str, to: List[str], subject: str, message_text: s
         message['cc'] = ", ".join(cc)
     if bcc:
         message['bcc'] = ", ".join(bcc) # Note: BCC usually handled by API, not header
-    message['Message-ID'] = email.utils.make_msgid()
+    message['Message-ID'] = message_id or email.utils.make_msgid()
+    for header, value in (extra_headers or {}).items():
+        message[header] = value
 
     msg = MIMEText(message_text, 'plain') # Default to plain text
     message.attach(msg)
@@ -98,7 +110,18 @@ def create_raw_message(sender: str, to: List[str], subject: str, message_text: s
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     return {"raw": raw}
 
-def create_raw_reply_message(sender: str, to: List[str], subject: str, message_text: str, thread_id: str, original_message_id: str, original_references: Optional[str]) -> Dict[str, str]:
+def create_raw_reply_message(
+    sender: str,
+    to: List[str],
+    subject: str,
+    message_text: str,
+    thread_id: str,
+    original_message_id: str,
+    original_references: Optional[str],
+    *,
+    message_id: Optional[str] = None,
+    extra_headers: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
     """Creates a MIME reply email message and returns it base64 encoded."""
     message = MIMEMultipart()
     message['to'] = ", ".join(to)
@@ -115,7 +138,9 @@ def create_raw_reply_message(sender: str, to: List[str], subject: str, message_t
     if original_message_id not in references:
         references = f"{references} {original_message_id}".strip()
     message['References'] = references
-    message['Message-ID'] = email.utils.make_msgid()
+    message['Message-ID'] = message_id or email.utils.make_msgid()
+    for header, value in (extra_headers or {}).items():
+        message[header] = value
 
     msg = MIMEText(message_text, 'plain') # Default to plain text
     message.attach(msg)

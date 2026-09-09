@@ -1,22 +1,28 @@
 """Durable, owner-authorized execution of agent-requested side effects."""
+from __future__ import annotations
+
 import logging
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Mapping, Optional, Tuple
+from email.utils import getaddresses
+from typing import Any, Mapping
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from server.action_payloads import canonicalize_action_payload
 from server.database import AsyncSessionLocal
-from server.integrations.google import (
-    GoogleOperationRejected,
-    GoogleOperationTimeout,
-    GoogleProviderError,
-    execute_google_request,
-    run_google_operation,
+from server.models import PendingAction, PendingActionAuditEvent
+from server.services.action_handlers import (
+    AmbiguousActionOutcome,
+    ConfirmedActionFailure,
+    ReconciliationResult,
+    execute_action,
+    reconcile_action,
 )
-from server.models import PendingAction
-from tools.idempotency import make_idempotency_key, make_payload_hash
+from tools.idempotency import make_command_record_key, make_payload_hash
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +37,8 @@ SUPPORTED_ACTIONS = {
     ACTION_CREATE_TASK,
 }
 PENDING_ACTION_TTL = timedelta(minutes=15)
+PROCESSING_LEASE = timedelta(minutes=2)
+_COMMAND_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 class PendingActionNotFound(Exception):
@@ -41,12 +49,32 @@ class PendingActionInvalidState(Exception):
     pass
 
 
+class PendingActionCommandConflict(Exception):
+    pass
+
+
 class PendingActionExecutionError(Exception):
     pass
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def issue_command_key() -> str:
+    """Issue a server-only opaque key for one agent/tool invocation."""
+    return secrets.token_urlsafe(24)
+
+
+def _validate_command_key(command_key: str) -> str:
+    if not isinstance(command_key, str) or not _COMMAND_KEY_RE.fullmatch(command_key):
+        raise ValueError("Invalid server command key")
+    return command_key
+
+
+def _command_record_key(user_id: UUID, command_key: str) -> str:
+    """Compatibility value for the old column; it is not an intent hash."""
+    return make_command_record_key(str(user_id), command_key)
 
 
 def _summary(action_type: str, payload: Mapping[str, Any]) -> str:
@@ -63,7 +91,12 @@ def _summary(action_type: str, payload: Mapping[str, Any]) -> str:
     raise ValueError(f"Unsupported pending action type: {action_type}")
 
 
-def action_to_dict(action: PendingAction) -> Dict[str, Any]:
+def action_to_dict(action: PendingAction) -> dict[str, Any]:
+    """Serialize a DB action for route responses and internal dispatch.
+
+    Attempt tokens are intentionally present only in this internal dictionary;
+    `PendingActionResponse` does not expose them to approval clients.
+    """
     return {
         "id": action.id,
         "action_type": action.action_type,
@@ -77,36 +110,123 @@ def action_to_dict(action: PendingAction) -> Dict[str, Any]:
         "expires_at": action.expires_at,
         "approved_at": action.approved_at,
         "processed_at": action.processed_at,
+        "command_key": action.command_key,
+        "attempt_token": action.attempt_token,
+        "attempt_count": action.attempt_count,
+        "attempt_started_at": action.attempt_started_at,
+        "lease_expires_at": action.lease_expires_at,
+        "reconciliation_reason": action.reconciliation_reason,
+        "reconciliation_required_at": action.reconciliation_required_at,
     }
+
+
+def _audit(
+    db: Any,
+    action: PendingAction,
+    *,
+    event_type: str,
+    old_status: str | None,
+    new_status: str,
+    actor_user_id: UUID | None = None,
+    reason: str | None = None,
+    evidence: Mapping[str, Any] | None = None,
+) -> None:
+    db.add(
+        PendingActionAuditEvent(
+            action_id=action.id,
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            old_status=old_status,
+            new_status=new_status,
+            attempt_token=action.attempt_token,
+            reason=reason,
+            evidence=dict(evidence) if evidence else None,
+        )
+    )
+
+
+def _require_canonical_payload(action: PendingAction) -> dict[str, Any]:
+    payload = canonicalize_action_payload(action.action_type, action.payload)
+    if make_payload_hash(payload) != action.payload_hash:
+        raise ValueError("payload hash mismatch")
+    return payload
+
+
+def _require_attempt_token(action: Mapping[str, Any]) -> str:
+    token = action.get("attempt_token")
+    if not isinstance(token, str) or not token:
+        raise PendingActionInvalidState("Action claim has no attempt token")
+    return token
+
+
+def _mark_reconciliation_required(
+    db: Any,
+    action: PendingAction,
+    *,
+    reason: str,
+    evidence: Mapping[str, Any] | None = None,
+    actor_user_id: UUID | None = None,
+    event_type: str = "reconciliation_required",
+) -> None:
+    old_status = action.status
+    action.status = "reconciliation_required"
+    action.error_code = reason
+    action.reconciliation_reason = reason
+    action.reconciliation_evidence = dict(evidence) if evidence else None
+    action.reconciliation_required_at = _now()
+    action.processed_at = _now()
+    _audit(
+        db,
+        action,
+        event_type=event_type,
+        old_status=old_status,
+        new_status="reconciliation_required",
+        actor_user_id=actor_user_id,
+        reason=reason,
+        evidence=evidence,
+    )
 
 
 async def create_pending_action(
     user_id: str,
     action_type: str,
     payload: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Persist an immutable action request and return an existing duplicate if present."""
+    *,
+    command_key: str,
+) -> dict[str, Any]:
+    """Persist one immutable command, deduplicated only within its command key.
+
+    The calling agent issues and retains `command_key` before tool invocation;
+    it is never supplied by the LLM and never minted at persistence time. A new
+    key intentionally permits a later identical side effect.
+    """
     if action_type not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported pending action type: {action_type}")
-
     owner_id = UUID(str(user_id))
-    immutable_payload = dict(payload)
-    idempotency_key = make_idempotency_key(str(owner_id), action_type, immutable_payload)
+    command_key = _validate_command_key(command_key)
+    canonical_payload = canonicalize_action_payload(action_type, payload)
+    payload_hash = make_payload_hash(canonical_payload)
 
     async with AsyncSessionLocal() as db:
         existing = await db.scalar(
-            select(PendingAction).where(PendingAction.idempotency_key == idempotency_key)
+            select(PendingAction).where(
+                PendingAction.user_id == owner_id,
+                PendingAction.command_key == command_key,
+            )
         )
         if existing:
+            if existing.action_type != action_type or existing.payload_hash != payload_hash:
+                raise PendingActionCommandConflict("Command key was already used for another payload")
             return action_to_dict(existing)
 
         action = PendingAction(
             user_id=owner_id,
             action_type=action_type,
-            payload=immutable_payload,
-            payload_hash=make_payload_hash(immutable_payload),
-            idempotency_key=idempotency_key,
-            summary=_summary(action_type, immutable_payload),
+            payload=canonical_payload,
+            payload_hash=payload_hash,
+            idempotency_key=_command_record_key(owner_id, command_key),
+            command_key=command_key,
+            summary=_summary(action_type, canonical_payload),
             status="pending",
             expires_at=_now() + PENDING_ACTION_TTL,
         )
@@ -114,11 +234,18 @@ async def create_pending_action(
         try:
             await db.commit()
         except IntegrityError:
+            # The unique owner/key index arbitrates concurrent duplicate tool
+            # delivery. It must never turn a changed payload into a success.
             await db.rollback()
             existing = await db.scalar(
-                select(PendingAction).where(PendingAction.idempotency_key == idempotency_key)
+                select(PendingAction).where(
+                    PendingAction.user_id == owner_id,
+                    PendingAction.command_key == command_key,
+                )
             )
             if existing:
+                if existing.action_type != action_type or existing.payload_hash != payload_hash:
+                    raise PendingActionCommandConflict("Command key was already used for another payload")
                 return action_to_dict(existing)
             raise
         await db.refresh(action)
@@ -133,25 +260,56 @@ def _query_for_reply(recipient_email: str, subject_filter: str) -> str:
     return query
 
 
+def _header_addresses(value: str | None) -> list[str]:
+    return [address.casefold() for _name, address in getaddresses([value or ""]) if address]
+
+
 async def resolve_reply_target(
     gmail_service: Any,
     recipient_email: str,
     subject_filter: str,
-) -> str:
-    """Resolve the mutable search expression before approval and persist its message ID."""
+) -> dict[str, str]:
+    """Freeze all mutable reply routing/thread metadata before approval."""
     request = gmail_service.users().messages().list(
         userId="me",
         q=_query_for_reply(recipient_email, subject_filter),
         maxResults=1,
     )
+    from server.integrations.google import execute_google_request
+    from tools.utils import get_header_value
+
     response = await execute_google_request(request, resource=gmail_service)
     messages = response.get("messages", [])
     if not messages:
         raise PendingActionExecutionError("No matching email was found for this reply.")
-    return messages[0]["id"]
+    original_message_id = messages[0].get("id")
+    if not original_message_id:
+        raise PendingActionExecutionError("Reply target did not include a message ID.")
+    source = await execute_google_request(
+        gmail_service.users().messages().get(userId="me", id=original_message_id, format="metadata"),
+        resource=gmail_service,
+    )
+    headers = source.get("payload", {}).get("headers", [])
+    reply_to = get_header_value(headers, "Reply-To")
+    sender = get_header_value(headers, "From")
+    candidates = _header_addresses(reply_to) or _header_addresses(sender)
+    thread_id = source.get("threadId")
+    rfc_message_id = get_header_value(headers, "Message-ID")
+    subject = get_header_value(headers, "Subject") or "(no subject)"
+    if len(candidates) != 1 or not thread_id or not rfc_message_id:
+        raise PendingActionExecutionError("Reply target did not include stable recipient/thread metadata.")
+    # Pydantic performs final provider-ID/address validation when this is staged.
+    return {
+        "recipient_email": candidates[0],
+        "original_message_id": original_message_id,
+        "thread_id": thread_id,
+        "original_rfc_message_id": rfc_message_id,
+        "original_references": get_header_value(headers, "References") or "",
+        "original_subject": subject,
+    }
 
 
-async def get_pending_action(action_id: UUID, user_id: UUID) -> Dict[str, Any]:
+async def get_pending_action(action_id: UUID, user_id: UUID) -> dict[str, Any]:
     async with AsyncSessionLocal() as db:
         action = await db.scalar(
             select(PendingAction).where(
@@ -164,7 +322,16 @@ async def get_pending_action(action_id: UUID, user_id: UUID) -> Dict[str, Any]:
         return action_to_dict(action)
 
 
-async def reject_pending_action(action_id: UUID, user_id: UUID) -> Dict[str, Any]:
+async def get_pending_action_for_reconciliation(action_id: UUID) -> dict[str, Any]:
+    """Fetch an action after route-level operator authorization, not by owner."""
+    async with AsyncSessionLocal() as db:
+        action = await db.get(PendingAction, action_id)
+        if not action:
+            raise PendingActionNotFound()
+        return action_to_dict(action) | {"user_id": action.user_id}
+
+
+async def reject_pending_action(action_id: UUID, user_id: UUID) -> dict[str, Any]:
     async with AsyncSessionLocal() as db:
         action = await db.scalar(
             select(PendingAction)
@@ -174,16 +341,25 @@ async def reject_pending_action(action_id: UUID, user_id: UUID) -> Dict[str, Any
         if not action:
             raise PendingActionNotFound()
         if action.status == "pending":
+            old_status = action.status
             action.status = "rejected"
             action.processed_at = _now()
+            _audit(
+                db,
+                action,
+                event_type="rejected",
+                old_status=old_status,
+                new_status="rejected",
+                actor_user_id=user_id,
+            )
             await db.commit()
         elif action.status not in {"rejected", "expired"}:
             raise PendingActionInvalidState(f"Cannot reject action in {action.status} state")
         return action_to_dict(action)
 
 
-async def claim_pending_action(action_id: UUID, user_id: UUID) -> Tuple[Dict[str, Any], bool]:
-    """Atomically make a pending action processing so only one approval executes it."""
+async def claim_pending_action(action_id: UUID, user_id: UUID) -> tuple[dict[str, Any], bool]:
+    """Owner-lock, verify, and lease one action before provider dispatch."""
     async with AsyncSessionLocal() as db:
         action = await db.scalar(
             select(PendingAction)
@@ -192,189 +368,274 @@ async def claim_pending_action(action_id: UUID, user_id: UUID) -> Tuple[Dict[str
         )
         if not action:
             raise PendingActionNotFound()
+        now = _now()
 
-        if action.status == "pending" and action.expires_at <= _now():
+        if action.status == "processing" and (
+            action.lease_expires_at is None or action.lease_expires_at <= now
+        ):
+            _mark_reconciliation_required(
+                db,
+                action,
+                reason="processing_lease_expired",
+                evidence={"lease_expires_at": action.lease_expires_at.isoformat() if action.lease_expires_at else None},
+            )
+            await db.commit()
+            return action_to_dict(action), False
+
+        if action.status == "pending" and action.expires_at <= now:
+            old_status = action.status
             action.status = "expired"
-            action.processed_at = _now()
+            action.processed_at = now
+            _audit(db, action, event_type="expired", old_status=old_status, new_status="expired")
             await db.commit()
             return action_to_dict(action), False
 
         if action.status != "pending":
             return action_to_dict(action), False
 
+        try:
+            _require_canonical_payload(action)
+        except (TypeError, ValueError):
+            _mark_reconciliation_required(
+                db,
+                action,
+                reason="payload_integrity_mismatch",
+                evidence={"payload_hash": action.payload_hash},
+            )
+            await db.commit()
+            return action_to_dict(action), False
+
+        old_status = action.status
         action.status = "processing"
-        action.approved_at = _now()
-        await db.commit()
+        action.approved_at = now
+        action.attempt_token = secrets.token_urlsafe(32)
+        action.attempt_count += 1
+        action.attempt_started_at = now
+        action.lease_expires_at = now + PROCESSING_LEASE
+        _audit(
+            db,
+            action,
+            event_type="claimed",
+            old_status=old_status,
+            new_status="processing",
+            actor_user_id=user_id,
+            evidence={"attempt_count": action.attempt_count},
+        )
+        await db.commit()  # Commit before any provider side effect.
         return action_to_dict(action), True
 
 
-def _execute_action_sync(
+async def _finalize_claimed_action(
     action: Mapping[str, Any],
-    gmail_service: Any,
-    calendar_service: Any,
-    tasks_service: Any,
-) -> Dict[str, Any]:
-    payload = action["payload"]
-    action_type = action["action_type"]
-
-    if action_type == ACTION_SEND_EMAIL:
-        from tools.email.send_gmail import send_new_email
-
-        sent = send_new_email(
-            gmail_service=gmail_service,
-            sender_email=payload["sender_email"],
-            to=[payload["recipient_email"]],
-            subject=payload["subject"],
-            body=payload["email_body"],
-            raise_on_error=True,
+    *,
+    status: str,
+    result: Mapping[str, Any] | None,
+    error_code: str | None,
+    event_type: str,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fence finalization on status+attempt token so stale workers cannot win."""
+    attempt_token = _require_attempt_token(action)
+    action_id = UUID(str(action["id"]))
+    async with AsyncSessionLocal() as db:
+        row = await db.scalar(
+            select(PendingAction)
+            .where(
+                PendingAction.id == action_id,
+                PendingAction.status == "processing",
+                PendingAction.attempt_token == attempt_token,
+            )
+            .with_for_update()
         )
-        if not sent or not sent.get("id"):
-            raise PendingActionExecutionError("Email provider did not confirm the send.")
-        return {"external_id": sent["id"]}
+        if row is None:
+            current = await db.get(PendingAction, action_id)
+            if current is None:
+                raise PendingActionNotFound()
+            return action_to_dict(current)
 
-    if action_type == ACTION_SEND_REPLY:
-        from tools.email.send_gmail import send_reply_email
-
-        sent = send_reply_email(
-            gmail_service=gmail_service,
-            user_email=payload["sender_email"],
-            original_email_id=payload["original_message_id"],
-            reply_body=payload["reply_message"],
-            reply_to_all=False,
-            raise_on_error=True,
-        )
-        if not sent or not sent.get("id"):
-            raise PendingActionExecutionError("Email provider did not confirm the reply.")
-        return {"external_id": sent["id"], "original_message_id": payload["original_message_id"]}
-
-    if action_type == ACTION_CREATE_EVENT:
-        raise PendingActionExecutionError("Calendar actions use the async provider adapter.")
-
-    if action_type == ACTION_CREATE_TASK:
-        from tools.tasks.tasks_tool import get_or_create_task_list, insert_task
-
-        task_list_id = get_or_create_task_list(
-            tasks_service,
-            "Executive Agent Tasks",
-            raise_on_error=True,
-        )
-        if not task_list_id:
-            raise PendingActionExecutionError("Task provider did not provide a task list.")
-        task = insert_task(
-            tasks_service,
-            task_list_id,
-            {"title": payload["title"], "notes": payload["notes"]},
-            raise_on_error=True,
-        )
-        if not task or not task.get("id"):
-            raise PendingActionExecutionError("Task provider did not confirm task creation.")
-        return {"external_id": task["id"]}
-
-    raise PendingActionExecutionError("Unsupported pending action type.")
+        if row.lease_expires_at is None or row.lease_expires_at <= _now():
+            _mark_reconciliation_required(
+                db,
+                row,
+                reason="processing_lease_expired",
+                evidence={"finalizer": event_type},
+            )
+        elif status == "reconciliation_required":
+            _mark_reconciliation_required(
+                db,
+                row,
+                reason=error_code or "provider_outcome_unknown",
+                evidence=evidence,
+                event_type=event_type,
+            )
+        else:
+            old_status = row.status
+            row.status = status
+            row.result = dict(result) if result else None
+            row.error_code = error_code
+            row.processed_at = _now()
+            _audit(
+                db,
+                row,
+                event_type=event_type,
+                old_status=old_status,
+                new_status=status,
+                reason=error_code,
+                evidence=evidence,
+            )
+        await db.commit()
+        await db.refresh(row)
+        return action_to_dict(row)
 
 
-async def _execute_calendar_action(
-    action: Mapping[str, Any],
-    calendar_service: Any,
-) -> Dict[str, Any]:
-    """Execute the complete calendar write through the bounded request adapter."""
-    payload = action["payload"]
-    request_id = str(action["id"]).replace("-", "")
-    attendees = payload.get("attendee_emails", [])
-    request = calendar_service.events().insert(
-        calendarId="primary",
-        body={
-            "summary": payload["title"],
-            "location": payload.get("location", ""),
-            "description": payload.get("description", ""),
-            "start": {"dateTime": payload["start_time_iso"], "timeZone": payload["event_timezone"]},
-            "end": {"dateTime": payload["end_time_iso"], "timeZone": payload["event_timezone"]},
-            "attendees": [{"email": email} for email in attendees],
-            "reminders": {"useDefault": True},
-            "conferenceData": {
-                "createRequest": {
-                    "requestId": request_id,
-                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                }
-            },
-        },
-        conferenceDataVersion=1,
-        sendUpdates="all" if attendees else "none",
+async def finalize_pre_dispatch_failure(action: Mapping[str, Any], error_code: str) -> dict[str, Any]:
+    """End a claimed action only when provider dispatch definitely never began."""
+    return await _finalize_claimed_action(
+        action,
+        status="failed",
+        result=None,
+        error_code=error_code,
+        event_type="pre_dispatch_failed",
+        evidence={"dispatch": "not_started"},
     )
-    event = await execute_google_request(request, resource=calendar_service)
-    if not event or not event.get("id"):
-        raise PendingActionExecutionError("Calendar provider did not confirm event creation.")
-    return {"external_id": event["id"]}
 
 
 async def execute_claimed_action(
     action: Mapping[str, Any],
-    gmail_service: Any,
-    calendar_service: Any,
-    tasks_service: Any,
-) -> Dict[str, Any]:
-    """Execute a claimed action once and durably record its final outcome.
-
-    A processing action is never automatically retried after a process crash or
-    ambiguous provider response, because retrying could duplicate an external
-    side effect. It must instead be reconciled by an operator.
-    """
+    *,
+    gmail_service: Any = None,
+    calendar_service: Any = None,
+    tasks_service: Any = None,
+) -> dict[str, Any]:
+    """Execute a leased command once; transport uncertainty requires reconciliation."""
     try:
-        if action["action_type"] == ACTION_CREATE_EVENT:
-            result = await _execute_calendar_action(action, calendar_service)
-        else:
-            resource = gmail_service or calendar_service or tasks_service
-            result = await run_google_operation(
-                _execute_action_sync,
-                action,
-                gmail_service,
-                calendar_service,
-                tasks_service,
-                resource=resource,
-                passthrough=(PendingActionExecutionError,),
-            )
-        status = "succeeded"
-        error_code: Optional[str] = None
-        processed_at: datetime | None = _now()
-    except GoogleOperationTimeout:
-        logger.warning("Pending action %s timed out", action["id"])
-        result = None
-        status = "failed"
-        error_code = "provider_timeout"
-        processed_at = _now()
-    except GoogleOperationRejected:
-        logger.warning("Pending action %s was rejected by the provider", action["id"])
-        result = None
-        status = "failed"
-        error_code = "provider_rejected"
-        processed_at = _now()
-    except GoogleProviderError:
-        logger.warning("Pending action %s provider operation failed", action["id"])
-        result = None
-        status = "failed"
-        error_code = "provider_unavailable"
-        processed_at = _now()
-    except PendingActionExecutionError as exc:
-        logger.warning("Pending action %s failed: %s", action["id"], exc)
-        result = None
-        status = "failed"
-        error_code = "provider_not_confirmed"
-        processed_at = _now()
+        result = await execute_action(
+            action,
+            gmail_service=gmail_service,
+            calendar_service=calendar_service,
+            tasks_service=tasks_service,
+        )
+    except ConfirmedActionFailure as exc:
+        logger.warning("Pending action %s failed before acceptance: %s", action["id"], exc.code)
+        return await _finalize_claimed_action(
+            action,
+            status="failed",
+            result=None,
+            error_code=exc.code,
+            event_type="confirmed_failure",
+            evidence={"dispatch": "not_accepted"},
+        )
+    except AmbiguousActionOutcome as exc:
+        logger.warning("Pending action %s needs reconciliation: %s", action["id"], exc.code)
+        return await _finalize_claimed_action(
+            action,
+            status="reconciliation_required",
+            result=None,
+            error_code=exc.code,
+            event_type="provider_outcome_ambiguous",
+            evidence={"dispatch": "acceptance_unknown"},
+        )
     except Exception:
-        logger.exception("Pending action %s failed unexpectedly", action["id"])
-        result = None
-        status = "failed"
-        error_code = "execution_failed"
-        processed_at = _now()
+        logger.exception("Pending action %s ended unexpectedly after claim", action["id"])
+        return await _finalize_claimed_action(
+            action,
+            status="reconciliation_required",
+            result=None,
+            error_code="execution_interrupted",
+            event_type="execution_interrupted",
+            evidence={"dispatch": "acceptance_unknown"},
+        )
+
+    return await _finalize_claimed_action(
+        action,
+        status="succeeded",
+        result=result,
+        error_code=None,
+        event_type="succeeded",
+        evidence={"dispatch": "confirmed"},
+    )
+
+
+async def reconcile_pending_action(
+    action_id: UUID,
+    operator_user_id: UUID,
+    *,
+    gmail_service: Any = None,
+    calendar_service: Any = None,
+    tasks_service: Any = None,
+) -> dict[str, Any]:
+    """Perform a no-write reconciliation and audit the operator transition."""
+    # Promote an expired lease under the action row lock. A worker may have
+    # dispatched before crashing, so no owner approval/retry is required before
+    # an authorized operator can investigate it.
+    async with AsyncSessionLocal() as db:
+        row = await db.scalar(select(PendingAction).where(PendingAction.id == action_id).with_for_update())
+        if row is None:
+            raise PendingActionNotFound()
+        if row.status == "processing" and (
+            row.lease_expires_at is None or row.lease_expires_at <= _now()
+        ):
+            _mark_reconciliation_required(
+                db,
+                row,
+                reason="processing_lease_expired",
+                evidence={"promotion": "operator_reconciliation"},
+                actor_user_id=operator_user_id,
+                event_type="operator_promoted_expired_lease",
+            )
+            await db.commit()
+        elif row.status != "reconciliation_required":
+            raise PendingActionInvalidState("Only ambiguous actions can be reconciled")
+        action = action_to_dict(row)
+
+    outcome: ReconciliationResult = await reconcile_action(
+        action,
+        gmail_service=gmail_service,
+        calendar_service=calendar_service,
+        tasks_service=tasks_service,
+    )
 
     async with AsyncSessionLocal() as db:
-        row = await db.get(PendingAction, action["id"])
-        if not row:
-            raise PendingActionNotFound()
-        row.status = status
-        row.result = result
-        row.error_code = error_code
-        row.processed_at = processed_at
+        row = await db.scalar(
+            select(PendingAction)
+            .where(PendingAction.id == action_id, PendingAction.status == "reconciliation_required")
+            .with_for_update()
+        )
+        if row is None:
+            current = await db.get(PendingAction, action_id)
+            if current is None:
+                raise PendingActionNotFound()
+            return action_to_dict(current)
+
+        old_status = row.status
+        if outcome.status == "succeeded":
+            row.status = "succeeded"
+            row.result = outcome.result
+            row.error_code = None
+            row.processed_at = _now()
+        elif outcome.status == "failed":
+            row.status = "failed"
+            row.result = None
+            row.error_code = outcome.error_code
+            row.processed_at = _now()
+        else:
+            # The state remains explicit; refresh only evidence/reason so the
+            # next authorized reconciliation has an auditable trail.
+            row.error_code = outcome.error_code
+            row.reconciliation_reason = outcome.error_code
+            row.reconciliation_evidence = outcome.evidence
+            row.reconciliation_required_at = _now()
+
+        _audit(
+            db,
+            row,
+            event_type="operator_reconciled",
+            old_status=old_status,
+            new_status=row.status,
+            actor_user_id=operator_user_id,
+            reason=outcome.error_code,
+            evidence=outcome.evidence,
+        )
         await db.commit()
         await db.refresh(row)
         return action_to_dict(row)

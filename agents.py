@@ -20,6 +20,7 @@ from google.genai.types import (
 # Assuming your prompts are in clients/prompt.py
 from clients.prompt import EMAIL_AGENT_PROMPT, GENERAL_AGENT_PROMPT ,EXECUTIVE_AGENT_PROMPT
 
+from server.services.pending_actions import issue_command_key
 from tools.llm_tools import (
     send_email, create_draft, create_event, create_task,
     mark_as_read, send_reply_to_user, get_calendar_events# Ensure all referenced tools are imported
@@ -27,20 +28,40 @@ from tools.llm_tools import (
 
 logger = logging.getLogger(__name__)
 
+_PENDING_ACTION_TOOL_NAMES = {"send_email", "send_reply_to_user", "create_event", "create_task"}
+
+
+def _command_key_for_tool_call(
+    command_keys: dict[str, str],
+    *,
+    scope: str,
+    function_call: Any,
+) -> str:
+    """Return one server key for a provider function-call delivery/retry."""
+    provider_call_id = getattr(function_call, "id", None)
+    identity = (
+        f"provider:{provider_call_id}"
+        if isinstance(provider_call_id, str) and provider_call_id
+        else scope
+    )
+    return command_keys.setdefault(identity, issue_command_key())
+
+
 # --- Helper function to load configuration ---
 def load_config(config_path: str = "user_config.yaml") -> Dict[str, Any]:
-    """Loads configuration from a YAML file."""
+    """Load the current user profile contract."""
     try:
-        with open(config_path, 'r') as file:
+        with open(config_path, "r") as file:
             config = yaml.safe_load(file)
-        logger.info(f"Configuration loaded successfully from {config_path}")
+        logger.info("Configuration loaded successfully from %s", config_path)
         return config
     except FileNotFoundError:
-        logger.error(f"Config file not found at {config_path}. Ensure it's in the same directory or provide full path.")
+        logger.error("Config file not found at %s. Ensure it is available.", config_path)
         return {}
-    except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML config file {config_path}: {e}")
+    except yaml.YAMLError as error:
+        logger.error("Error parsing config %s: %s", config_path, error)
         return {}
+
 
 
 # --- Function Declarations (MUST be accurate and complete for the LLM to use tools correctly) ---
@@ -182,6 +203,7 @@ class ExecutiveAgent(Agent):
         super().__init__(model_name)
         self.user_id = user_id
         self.available_python_tools: Dict[str, Callable] = {}
+        self._tool_command_keys: dict[str, str] = {}
         # Load config once when the agent is initialized
         self.user_config = load_config() 
 
@@ -241,6 +263,7 @@ class ExecutiveAgent(Agent):
         current_user_email: Optional[str] = None,
         allow_tools: bool = True,
     ) -> str:
+        self._tool_command_keys = {}
         now = datetime.datetime.now()
         tomorrow_date = now + datetime.timedelta(days=1)
 
@@ -339,16 +362,26 @@ class ExecutiveAgent(Agent):
                 history.append(candidate.content) 
 
                 function_response_parts = []
-                for function_call in function_calls_to_execute:
+                for function_call_index, function_call in enumerate(function_calls_to_execute):
                     function_name = function_call.name
                     args = dict(function_call.args) if function_call.args else {}
+                    # command_key is never part of the declared LLM schema. Drop
+                    # any hallucinated/supplied value before adding the server key.
+                    args.pop("command_key", None)
 
                     logger.info(f"LLM requested function call: {function_name} with args: {args}")
 
                     if function_name in self.available_python_tools:
                         python_function_to_call = self.available_python_tools[function_name]
                         try:
-                            tool_result = python_function_to_call(**args)
+                            hidden_kwargs = {}
+                            if function_name in _PENDING_ACTION_TOOL_NAMES:
+                                hidden_kwargs["command_key"] = _command_key_for_tool_call(
+                                    self._tool_command_keys,
+                                    scope=f"executive:{turn}:{function_call_index}:{function_name}",
+                                    function_call=function_call,
+                                )
+                            tool_result = python_function_to_call(**args, **hidden_kwargs)
                             if not inspect.isawaitable(tool_result):
                                 raise RuntimeError("Agent tool must be asynchronous")
                             api_response = await tool_result
@@ -505,7 +538,8 @@ class GeneralAgentStreamer(Agent):
     def __init__(self, user_id: str, model_name: str = "gemini-2.0-flash-lite"):
         super().__init__(model_name)
         self.user_id = user_id
-        self.available_python_tools: Dict[str, Callable] = {} 
+        self.available_python_tools: Dict[str, Callable] = {}
+        self._tool_command_keys: dict[str, str] = {}
 
     def _prepare_tool_objects_and_python_callables(
         self,
@@ -540,6 +574,7 @@ class GeneralAgentStreamer(Agent):
         and tool exceptions remain in server logs, while ``error_code`` gives
         clients a stable machine-readable reason for the terminal event.
         """
+        self._tool_command_keys = {}
         logger.debug(
             "GeneralAgentStreamer user: %s, model: %s, query: %s",
             self.user_id,
@@ -597,7 +632,15 @@ class GeneralAgentStreamer(Agent):
                 if final_fc_name in self.available_python_tools:
                     python_function_to_call = self.available_python_tools[final_fc_name]
                     try:
-                        tool_result = python_function_to_call(**merged_args)
+                        merged_args.pop("command_key", None)
+                        hidden_kwargs = {}
+                        if final_fc_name in _PENDING_ACTION_TOOL_NAMES:
+                            hidden_kwargs["command_key"] = _command_key_for_tool_call(
+                                self._tool_command_keys,
+                                scope=f"stream:{final_fc_name}",
+                                function_call=full_function_call_parts[0].function_call,
+                            )
+                        tool_result = python_function_to_call(**merged_args, **hidden_kwargs)
                         if not inspect.isawaitable(tool_result):
                             raise RuntimeError("Agent tool must be asynchronous")
                         api_response = await tool_result

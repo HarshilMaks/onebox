@@ -82,6 +82,9 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("AUTOMATION_OWNER_ID", "AGENT_USER_ID_FOR_SERVICE"),
     )
+    # Comma-separated UUIDs allowed to reconcile ambiguous external writes.
+    # An empty list intentionally disables the operator endpoint.
+    PENDING_ACTION_OPERATOR_IDS: str = ""
 
     # Persistent services.
     DATABASE_URL: str
@@ -147,6 +150,32 @@ class Settings(BaseSettings):
         if info.field_name == "SECRET_KEY" and len(normalized.encode("utf-8")) < 32:
             raise ValueError("SECRET_KEY must be at least 32 bytes for HS256")
         return normalized
+
+    @field_validator("PENDING_ACTION_OPERATOR_IDS", mode="before")
+    @classmethod
+    def validate_pending_action_operator_ids(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("PENDING_ACTION_OPERATOR_IDS must be comma-separated UUIDs")
+        identities: list[str] = []
+        for raw_identity in value.split(","):
+            normalized = raw_identity.strip()
+            if not normalized:
+                continue
+            try:
+                parsed = UUID(normalized)
+            except ValueError as exc:
+                raise ValueError("PENDING_ACTION_OPERATOR_IDS entries must be UUIDs") from exc
+            canonical = str(parsed)
+            if canonical in identities:
+                raise ValueError("PENDING_ACTION_OPERATOR_IDS must not contain duplicates")
+            identities.append(canonical)
+        return ",".join(identities)
+
+    @property
+    def pending_action_operator_ids(self) -> frozenset[UUID]:
+        return frozenset(UUID(value) for value in self.PENDING_ACTION_OPERATOR_IDS.split(",") if value)
 
     @field_validator(
         "PUBSUB_TOPIC",

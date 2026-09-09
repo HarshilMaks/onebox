@@ -17,17 +17,22 @@ from server.schemas import (
     AgentSuccessResponse,
     PendingActionResponse,
 )
+from server.integrations.google import GoogleProviderError
 from server.integrations.llm import (
     LlmOperationInternal,
     LlmOperationTimeout,
     LlmOperationUnavailable,
 )
+from server.config import settings
 from server.services.pending_actions import (
     PendingActionInvalidState,
     PendingActionNotFound,
     claim_pending_action,
     execute_claimed_action,
+    finalize_pre_dispatch_failure,
     get_pending_action,
+    get_pending_action_for_reconciliation,
+    reconcile_pending_action,
     reject_pending_action,
 )
 from server.services.credentials import (
@@ -91,7 +96,7 @@ async def _action_provider_services(
         service = await build_google_api_service(connection, selected[0], selected[1])
     except GoogleReconnectRequired:
         raise HTTPException(status_code=409, detail="Google account reconnection is required") from None
-    except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable):
+    except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable, GoogleProviderError):
         raise HTTPException(status_code=503, detail="Google credentials are temporarily unavailable") from None
 
     services: dict[str, Resource | None] = {
@@ -101,6 +106,20 @@ async def _action_provider_services(
     }
     services[selected[2]] = service
     return services
+
+
+async def require_pending_action_operator(
+    user_info: dict = Depends(get_current_user_info),
+) -> dict:
+    """Fail closed unless the authenticated principal is explicitly configured."""
+    operators = settings.pending_action_operator_ids
+    if not operators:
+        logger.error("Pending-action reconciliation operator identities are not configured")
+        raise HTTPException(status_code=503, detail="Pending-action reconciliation is not configured")
+    if user_info["user_id"] not in operators:
+        logger.warning("Denied pending-action reconciliation to non-operator")
+        raise HTTPException(status_code=403, detail="Not authorized to reconcile pending actions")
+    return user_info
 
 
 @router.get("/actions/{action_id}", response_model=PendingActionResponse)
@@ -125,7 +144,13 @@ async def approve_pending_action_endpoint(
         action, claimed = await claim_pending_action(action_id, user_info["user_id"])
         if not claimed:
             return action
-        services = await _action_provider_services(action, user_info["user_id"], db)
+        try:
+            services = await _action_provider_services(action, user_info["user_id"], db)
+        except HTTPException as exc:
+            # Credentials/services are resolved before constructing or dispatching
+            # the provider write, so this is a confirmed safe failure.
+            code = "google_reconnect_required" if exc.status_code == 409 else "credentials_unavailable_before_dispatch"
+            return await finalize_pre_dispatch_failure(action, code)
         return await execute_claimed_action(action, **services)
     except PendingActionNotFound:
         raise HTTPException(status_code=404, detail="Action not found")
@@ -144,6 +169,28 @@ async def reject_pending_action_endpoint(
         raise HTTPException(status_code=404, detail="Action not found")
     except PendingActionInvalidState:
         raise HTTPException(status_code=409, detail="Action cannot be rejected in its current state")
+
+
+@router.post("/actions/{action_id}/reconcile", response_model=PendingActionResponse)
+async def reconcile_pending_action_endpoint(
+    action_id: UUID,
+    operator: dict = Depends(require_pending_action_operator),
+    db: AsyncSession = Depends(get_agent_db),
+):
+    """Reconcile an ambiguous write using deterministic provider markers only."""
+    try:
+        action = await get_pending_action_for_reconciliation(action_id)
+        try:
+            services = await _action_provider_services(action, action["user_id"], db)
+        except HTTPException:
+            # Preserve the explicit ambiguous state and audit that lookup could
+            # not start; a service-build failure never triggers a provider write.
+            services = {"gmail_service": None, "calendar_service": None, "tasks_service": None}
+        return await reconcile_pending_action(action_id, operator["user_id"], **services)
+    except PendingActionNotFound:
+        raise HTTPException(status_code=404, detail="Action not found")
+    except PendingActionInvalidState:
+        raise HTTPException(status_code=409, detail="Action cannot be reconciled in its current state")
 
 
 @router.post("/executive/", response_model=AgentSuccessResponse)
