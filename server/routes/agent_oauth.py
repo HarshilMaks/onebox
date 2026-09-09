@@ -49,7 +49,7 @@ async def start_oauth(user_info: dict = Depends(get_current_user_info)):
     """Start a one-time OAuth flow bound to the authenticated user and email."""
     user_id = user_info["user_id"]
     try:
-        state = create_oauth_state(str(user_id), str(user_info["email"]))
+        state = await create_oauth_state(str(user_id), str(user_info["email"]))
     except (OAuthStateStoreUnavailable, ValueError):
         logger.error("Unable to create OAuth state for user %s", user_id)
         raise HTTPException(status_code=503, detail="OAuth is temporarily unavailable. Please try again.")
@@ -72,7 +72,7 @@ async def oauth_callback(
     """Exchange a one-time, owner-bound OAuth callback for stored credentials."""
     del scope  # Google may return this query parameter; it is not trusted input.
     try:
-        state_binding = consume_oauth_state(state)
+        state_binding = await consume_oauth_state(state)
     except OAuthStateStoreUnavailable:
         logger.error("OAuth state store unavailable during callback")
         return _frontend_redirect("failure", "OAuth is temporarily unavailable. Please try again.")

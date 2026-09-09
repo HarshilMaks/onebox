@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -12,15 +11,21 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from google.auth.exceptions import RefreshError
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import Resource, build
+from googleapiclient.discovery import Resource
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.config import settings
+from server.integrations.google import (
+    GoogleProviderError,
+    build_google_service,
+    execute_google_request,
+    google_auth_request,
+    run_google_operation,
+)
 from server.models import AgentToken
 from server.oauth_state import normalize_email
 from server.security.oauth_credentials import CredentialCodecError, OAuthCredentialCodec
@@ -109,12 +114,13 @@ async def get_credential_codec() -> OAuthCredentialCodec:
     assert settings.OAUTH_TOKEN_KEYRING_PATH is not None
     assert settings.OAUTH_TOKEN_ACTIVE_KEY_ID is not None
     try:
-        return await asyncio.to_thread(
+        return await run_google_operation(
             _load_codec,
             str(settings.OAUTH_TOKEN_KEYRING_PATH),
             settings.OAUTH_TOKEN_ACTIVE_KEY_ID,
+            passthrough=(CredentialCodecError,),
         )
-    except CredentialCodecError as exc:
+    except (CredentialCodecError, GoogleProviderError) as exc:
         raise CredentialEncryptionUnavailable() from exc
 
 
@@ -264,7 +270,11 @@ async def load_connected_google_connection(
                     refreshed = False
                     if credentials.expired:
                         try:
-                            await asyncio.to_thread(credentials.refresh, Request())
+                            await run_google_operation(
+                                credentials.refresh,
+                                google_auth_request(),
+                                passthrough=(RefreshError,),
+                            )
                             token_payload = _validate_token_payload(
                                 merge_oauth_token_payload(
                                     token_payload,
@@ -316,32 +326,39 @@ def _build_oauth_authorization_url(state: str, login_hint: str) -> str:
 
 
 async def create_oauth_authorization_url(state: str, login_hint: str) -> str:
-    return await asyncio.to_thread(_build_oauth_authorization_url, state, login_hint)
+    try:
+        return await run_google_operation(_build_oauth_authorization_url, state, login_hint)
+    except GoogleProviderError as exc:
+        raise OAuthExchangeFailed() from exc
 
 
-def _exchange_oauth_code(code: str) -> OAuthExchangeResult:
+def _exchange_oauth_code(code: str) -> tuple[Credentials, dict[str, Any]]:
     flow = Flow.from_client_config(
         get_client_config(),
         scopes=GOOGLE_OAUTH_SCOPES,
         redirect_uri=str(settings.OAUTH_REDIRECT_URI),
     )
-    flow.fetch_token(code=code)
+    flow.fetch_token(code=code, timeout=settings.PROVIDER_TIMEOUT_SECONDS)
     credentials = flow.credentials
     token_payload = _validate_token_payload(json.loads(credentials.to_json()))
-    userinfo_service = build("oauth2", "v2", credentials=credentials)
-    returned_email = userinfo_service.userinfo().get().execute().get("email")
-    normalized_google_email = normalize_email(returned_email)
-    return OAuthExchangeResult(
-        google_email=returned_email.strip(),
-        normalized_google_email=normalized_google_email,
-        token_payload=token_payload,
-    )
+    return credentials, token_payload
 
 
 async def exchange_oauth_code(code: str) -> OAuthExchangeResult:
-    """Exchange the code and obtain verified Google identity off the event loop."""
+    """Exchange code and fetch verified identity through bounded Google operations."""
     try:
-        return await asyncio.to_thread(_exchange_oauth_code, code)
+        credentials, token_payload = await run_google_operation(_exchange_oauth_code, code)
+        userinfo_service = await build_google_service("oauth2", "v2", credentials)
+        returned_email = (await execute_google_request(
+            userinfo_service.userinfo().get(),
+            resource=userinfo_service,
+        )).get("email")
+        normalized_google_email = normalize_email(returned_email)
+        return OAuthExchangeResult(
+            google_email=returned_email.strip(),
+            normalized_google_email=normalized_google_email,
+            token_payload=token_payload,
+        )
     except Exception as exc:
         logger.warning("Google OAuth exchange failed")
         raise OAuthExchangeFailed() from exc
@@ -426,12 +443,7 @@ async def build_google_api_service(
 ) -> Resource:
     """Build exactly one named Google client off the event loop."""
     try:
-        return await asyncio.to_thread(
-            build,
-            service_name,
-            version,
-            credentials=connection.credentials,
-        )
-    except Exception as exc:
+        return await build_google_service(service_name, version, connection.credentials)
+    except GoogleProviderError as exc:
         logger.warning("Google API client construction failed for %s", service_name)
         raise GoogleCredentialsUnavailable() from exc

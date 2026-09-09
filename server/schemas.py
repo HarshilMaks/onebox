@@ -163,3 +163,7 @@ class PendingActionResponse(BaseModel):
     expires_at: datetime
     approved_at: Optional[datetime] = None
     processed_at: Optional[datetime] = None
+    attempt_count: int = 0
+    lease_expires_at: Optional[datetime] = None
+    reconciliation_reason: Optional[str] = None
+    reconciliation_required_at: Optional[datetime] = None

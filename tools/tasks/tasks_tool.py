@@ -7,7 +7,12 @@ from tools.logging_config import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-def get_task_list_by_title(tasks_service: Resource, title: str) -> dict:
+def get_task_list_by_title(
+    tasks_service: Resource,
+    title: str,
+    *,
+    raise_on_error: bool = False,
+) -> dict:
     """
     Searches for a task list with a matching title.
     
@@ -24,14 +29,25 @@ def get_task_list_by_title(tasks_service: Resource, title: str) -> dict:
         return {}
     except HttpError as error:
         logger.error("Error retrieving task lists: %s", error)
+        if raise_on_error:
+            raise
         return {}
 
-def get_or_create_task_list(tasks_service: Resource, title: str) -> str:
+def get_or_create_task_list(
+    tasks_service: Resource,
+    title: str,
+    *,
+    raise_on_error: bool = False,
+) -> str:
     """
     Retrieves the task list ID for the given title. If it doesn't exist,
     a new task list is created and its ID is returned.
     """
-    tasklist = get_task_list_by_title(tasks_service, title)
+    tasklist = get_task_list_by_title(
+        tasks_service,
+        title,
+        raise_on_error=raise_on_error,
+    )
     if tasklist:
         return tasklist.get('id')
     # Task list not found, so create one.
@@ -41,6 +57,8 @@ def get_or_create_task_list(tasks_service: Resource, title: str) -> str:
         return new_tasklist.get('id')
     except HttpError as error:
         logger.error("Error creating new task list '%s': %s", title, error)
+        if raise_on_error:
+            raise
         return ""
 
 # The following functions operate on tasks within a valid task list.
@@ -84,7 +102,13 @@ def get_task(tasks_service: Resource, tasklist: str, task: str) -> dict:
         logger.error("Error getting task '%s' from task list '%s': %s", task, tasklist, error)
         return {}
 
-def insert_task(tasks_service: Resource, tasklist: str, task_body: dict) -> dict:
+def insert_task(
+    tasks_service: Resource,
+    tasklist: str,
+    task_body: dict,
+    *,
+    raise_on_error: bool = False,
+) -> dict:
     """
     Creates a new task on the specified task list.
     
@@ -97,6 +121,8 @@ def insert_task(tasks_service: Resource, tasklist: str, task_body: dict) -> dict
         return response
     except HttpError as error:
         logger.error("Error inserting task on task list '%s': %s", tasklist, error)
+        if raise_on_error:
+            raise
         return {}
 
 def list_tasks(tasks_service: Resource, tasklist: str, **kwargs) -> dict:

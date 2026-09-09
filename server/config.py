@@ -82,10 +82,22 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("AUTOMATION_OWNER_ID", "AGENT_USER_ID_FOR_SERVICE"),
     )
+    # Comma-separated UUIDs allowed to reconcile ambiguous external writes.
+    # An empty list intentionally disables the operator endpoint.
+    PENDING_ACTION_OPERATOR_IDS: str = ""
 
     # Persistent services.
     DATABASE_URL: str
     REDIS_URL: str
+
+    # External provider isolation. Every synchronous SDK operation has a finite
+    # caller deadline and bounded admission; streaming also has an idle limit.
+    PROVIDER_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
+    PROVIDER_MAX_CONCURRENCY: int = Field(default=8, ge=1, le=64)
+    REDIS_MAX_CONCURRENCY: int = Field(default=16, ge=1, le=256)
+    LLM_STREAM_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=600)
+    LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
+    LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
 
     # JWT contract. Priority 3 will enforce issuer and audience at verification.
     SECRET_KEY: str
@@ -138,6 +150,32 @@ class Settings(BaseSettings):
         if info.field_name == "SECRET_KEY" and len(normalized.encode("utf-8")) < 32:
             raise ValueError("SECRET_KEY must be at least 32 bytes for HS256")
         return normalized
+
+    @field_validator("PENDING_ACTION_OPERATOR_IDS", mode="before")
+    @classmethod
+    def validate_pending_action_operator_ids(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("PENDING_ACTION_OPERATOR_IDS must be comma-separated UUIDs")
+        identities: list[str] = []
+        for raw_identity in value.split(","):
+            normalized = raw_identity.strip()
+            if not normalized:
+                continue
+            try:
+                parsed = UUID(normalized)
+            except ValueError as exc:
+                raise ValueError("PENDING_ACTION_OPERATOR_IDS entries must be UUIDs") from exc
+            canonical = str(parsed)
+            if canonical in identities:
+                raise ValueError("PENDING_ACTION_OPERATOR_IDS must not contain duplicates")
+            identities.append(canonical)
+        return ",".join(identities)
+
+    @property
+    def pending_action_operator_ids(self) -> frozenset[UUID]:
+        return frozenset(UUID(value) for value in self.PENDING_ACTION_OPERATOR_IDS.split(",") if value)
 
     @field_validator(
         "PUBSUB_TOPIC",

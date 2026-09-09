@@ -1,13 +1,17 @@
-import asyncio
 import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.auth import exceptions as google_auth_exceptions
 from google.oauth2 import id_token
 from googleapiclient.errors import HttpError
 
 from server.config import settings
+from server.integrations.google import (
+    GoogleProviderError,
+    google_auth_request,
+    run_google_operation,
+)
 from server.logging_config import setup_logging
 from server.schemas import GlobalGmailHealthResponse
 from server.services.mail import (
@@ -40,15 +44,27 @@ async def require_pubsub_push_auth(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication")
 
     try:
-        claims = await asyncio.to_thread(
+        claims = await run_google_operation(
             id_token.verify_oauth2_token,
             token,
-            GoogleAuthRequest(),
+            google_auth_request(),
             expected_audience,
+            passthrough=(
+                ValueError,
+                google_auth_exceptions.InvalidType,
+                google_auth_exceptions.InvalidValue,
+                google_auth_exceptions.MalformedError,
+            ),
         )
+    except GoogleProviderError:
+        logger.warning("Pub/Sub push token verification is temporarily unavailable", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Pub/Sub push authentication is temporarily unavailable",
+        ) from None
     except Exception:
         logger.warning("Rejected Pub/Sub push request with an invalid OIDC token")
-        raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication")
+        raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication") from None
 
     email = claims.get("email")
     if (
@@ -194,7 +210,7 @@ async def check_inbox(
             q='is:unread in:inbox -category:promotions -category:social -from:noreply',
             maxResults=10,
         )
-        results = await execute_google_request(request)
+        results = await execute_google_request(request, gmail_service)
         
         messages = results.get('messages', [])
         
