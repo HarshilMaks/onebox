@@ -231,3 +231,172 @@ async def test_enqueue_refuses_unbaselined_mailbox(notification_db, monkeypatch)
     envelope = parse_notification_envelope(push_body(message_id="pubsub-unbaselined"), "projects/test/subscriptions/onebox")
     with pytest.raises(AutomationBaselineUnavailable):
         await enqueue_notification(envelope, owner_id)
+
+
+@pytest.mark.asyncio
+async def test_deleted_history_message_is_terminal_noop(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+    await seed_mailbox_state(notification_db, owner_id)
+
+    async def missing_message(_request, **_kwargs):
+        raise mail_notifications.GoogleOperationRejected(404)
+
+    monkeypatch.setattr(mail_notifications, "execute_google_request", missing_message)
+
+    class Messages:
+        def get(self, **_kwargs):
+            return object()
+
+    class Users:
+        def messages(self):
+            return Messages()
+
+    class MissingMessageService:
+        def users(self):
+            return Users()
+
+    completed = await mail_notifications._triage_message(
+        service=MissingMessageService(),
+        owner_id=owner_id,
+        mailbox_email="owner@example.com",
+        message_id="deleted-message",
+        source_history_id=101,
+    )
+    assert completed is True
+
+    async with notification_db() as session:
+        work = await session.scalar(
+            select(notification_jobs.GmailTriageWork).where(
+                notification_jobs.GmailTriageWork.message_id == "deleted-message"
+            )
+        )
+        assert work is not None
+        assert work.state == "noop"
+        assert work.last_error_code == "message_not_found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_error"),
+    [
+        ("credentials", "watch_credentials_unavailable"),
+        ("provider", "watch_provider_unavailable"),
+    ],
+)
+async def test_watch_renewal_failure_releases_claimed_lease(
+    notification_db, monkeypatch, failure_kind, expected_error
+):
+    owner_id = uuid.uuid4()
+    await seed_mailbox_state(notification_db, owner_id)
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(mail_notifications, "configured_automation_mailbox", configured)
+    if failure_kind == "credentials":
+
+        async def unavailable_service(_owner_id):
+            raise mail_notifications.GoogleCredentialsUnavailable()
+
+        monkeypatch.setattr(mail_notifications, "_gmail_service_for_owner", unavailable_service)
+    else:
+
+        class WatchUsers:
+            def watch(self, **_kwargs):
+                return object()
+
+        class WatchService:
+            def users(self):
+                return WatchUsers()
+
+        async def available_service(_owner_id):
+            return WatchService()
+
+        async def unavailable_watch(_request, **_kwargs):
+            raise mail_notifications.GoogleProviderError()
+
+        monkeypatch.setattr(mail_notifications, "_gmail_service_for_owner", available_service)
+        monkeypatch.setattr(mail_notifications, "execute_google_request", unavailable_watch)
+
+    assert await mail_notifications.renew_automation_watch(owner_id) is False
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.watch_lease_token is None
+        assert state.watch_lease_expires_at is None
+        assert state.last_error_code == expected_error
+
+
+@pytest.mark.asyncio
+async def test_attempt_limited_job_becomes_durable_resync_recovery(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, owner_id)
+    envelope = parse_notification_envelope(push_body(message_id="pubsub-attempt-limit"), "projects/test/subscriptions/onebox")
+    await enqueue_notification(envelope, owner_id)
+    claim = await claim_notification_job()
+    assert claim is not None
+
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        assert job is not None
+        job.attempt_count = notification_jobs.settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
+        await session.commit()
+
+    await fail_job(claim, error_code="history_unavailable")
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert job is not None
+        assert job.state == "pending"
+        assert job.lease_token is None
+        assert state is not None
+        assert state.resync_required is True
+        assert state.last_error_code == "history_unavailable"
+
+    recovery_claim = await claim_notification_job()
+    assert recovery_claim is not None
+    assert recovery_claim.id == claim.id
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, owner_id)
+    envelope = parse_notification_envelope(push_body(message_id="pubsub-stale-attempt-limit"), "projects/test/subscriptions/onebox")
+    await enqueue_notification(envelope, owner_id)
+    claim = await claim_notification_job()
+    assert claim is not None
+
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        assert job is not None
+        job.attempt_count = notification_jobs.settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
+        job.lease_expires_at = notification_jobs._now()
+        await session.commit()
+
+    # A crashed worker never calls fail_job. Claim-time recovery must still
+    # preserve a runnable resync continuation after its final lease expires.
+    assert await claim_notification_job() is None
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert job is not None
+        assert job.state == "pending"
+        assert job.last_error_code == "attempt_limit_exceeded"
+        assert state is not None
+        assert state.resync_required is True
+        assert state.last_error_code == "attempt_limit_exceeded"
+
+    recovery_claim = await claim_notification_job()
+    assert recovery_claim is not None
+    assert recovery_claim.id == claim.id

@@ -182,12 +182,28 @@ async def claim_notification_job() -> ClaimedNotificationJob | None:
         if not jobs:
             return None
         job = jobs[0]
-        mailbox_state = await db.get(GmailMailboxState, job.mailbox_email)
+        mailbox_state = await db.scalar(
+            select(GmailMailboxState)
+            .where(GmailMailboxState.mailbox_email == job.mailbox_email)
+            .with_for_update()
+        )
         resync_active = bool(mailbox_state and mailbox_state.resync_required)
         if job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS and not resync_active:
-            job.state = "dead_letter"
-            job.last_error_code = "attempt_limit_exceeded"
-            job.processed_at = now
+            if mailbox_state is None:
+                job.state = "dead_letter"
+                job.last_error_code = "mailbox_state_missing"
+                job.processed_at = now
+            else:
+                # A worker can crash after consuming its final lease. Preserve a
+                # runnable recovery job instead of leaving the history cursor
+                # behind an abandoned dead letter.
+                mailbox_state.resync_required = True
+                mailbox_state.last_error_code = "attempt_limit_exceeded"
+                job.state = "pending"
+                job.last_error_code = "attempt_limit_exceeded"
+                job.lease_token = None
+                job.lease_expires_at = None
+                job.processed_at = None
             await db.commit()
             return None
         job.state = "processing"
@@ -367,11 +383,30 @@ async def fail_job(
                 state.resync_required = True
                 state.last_error_code = error_code
         job.last_error_code = error_code
-        if dead_letter or (
-            job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS and not require_resync
-        ):
-            job.state = "dead_letter"
-            job.processed_at = _now()
+        requires_recovery = (
+            require_resync
+            or dead_letter
+            or job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
+        )
+        if requires_recovery:
+            state = await db.scalar(
+                select(GmailMailboxState)
+                .where(GmailMailboxState.mailbox_email == claim.mailbox_email)
+                .with_for_update()
+            )
+            if state is not None:
+                # A cursor cannot advance after an incomplete history range. Reuse
+                # this durable job as the resync trigger so later deliveries cannot
+                # remain permanently blocked behind a dead-lettered range.
+                state.resync_required = True
+                state.last_error_code = error_code
+                job.state = "pending"
+                job.lease_token = None
+                job.lease_expires_at = None
+                job.processed_at = None
+            else:
+                job.state = "dead_letter"
+                job.processed_at = _now()
         else:
             job.state = "pending"
             job.lease_token = None

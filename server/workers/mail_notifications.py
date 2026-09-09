@@ -68,6 +68,9 @@ async def _gmail_service_for_owner(owner_id: UUID) -> Any:
 
 async def renew_automation_watch(owner_id: UUID) -> bool:
     """Renew the persisted Gmail watch only when the singleton DB lease is due."""
+    mailbox: str | None = None
+    lease_token: str | None = None
+    error_code: str | None = None
     try:
         mailbox = await configured_automation_mailbox(owner_id)
         lease_token = await claim_watch_renewal(mailbox, owner_id)
@@ -88,20 +91,28 @@ async def renew_automation_watch(owner_id: UUID) -> bool:
         history_id = _history_id((response or {}).get("historyId"))
         expires_at = _watch_expiration((response or {}).get("expiration"))
         if history_id is None or expires_at is None:
-            await fail_watch_renewal(mailbox, lease_token, "watch_response_invalid")
-            return False
-        return await complete_watch_renewal(
-            mailbox,
-            lease_token,
-            history_id=history_id,
-            expires_at=expires_at,
-        )
+            error_code = "watch_response_invalid"
+        else:
+            return await complete_watch_renewal(
+                mailbox,
+                lease_token,
+                history_id=history_id,
+                expires_at=expires_at,
+            )
     except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable, GoogleReconnectRequired):
+        error_code = "watch_credentials_unavailable"
         logger.warning("Gmail watch credentials are unavailable")
     except GoogleProviderError:
+        error_code = "watch_provider_unavailable"
         logger.warning("Gmail watch renewal provider operation failed", exc_info=True)
     except Exception:
+        error_code = "watch_internal"
         logger.exception("Gmail watch renewal failed")
+    if mailbox is not None and lease_token is not None and error_code is not None:
+        try:
+            await fail_watch_renewal(mailbox, lease_token, error_code)
+        except Exception:
+            logger.exception("Failed to release Gmail watch renewal lease")
     return False
 
 
@@ -181,6 +192,15 @@ async def _triage_message(
         )
         await finalize_triage_work(claim, state="succeeded", summary=response)
         return True
+    except GoogleOperationRejected as exc:
+        if exc.status_code == 404:
+            # A history entry can outlive a deleted message. It is terminal work,
+            # not a provider outage, so the cursor can safely advance.
+            await finalize_triage_work(claim, state="noop", error_code="message_not_found")
+            return True
+        await release_triage_work(claim, error_code="triage_provider_rejected")
+        logger.warning("Gmail triage provider rejected message %s", message_id)
+        return False
     except GoogleProviderError:
         await release_triage_work(claim, error_code="triage_provider_unavailable")
         logger.warning("Gmail triage provider failure for message %s", message_id)
