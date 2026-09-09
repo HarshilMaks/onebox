@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str
 
+    # External provider isolation. Every synchronous SDK operation has a finite
+    # caller deadline and bounded admission; streaming also has an idle limit.
+    PROVIDER_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
+    PROVIDER_MAX_CONCURRENCY: int = Field(default=8, ge=1, le=64)
+    REDIS_MAX_CONCURRENCY: int = Field(default=16, ge=1, le=256)
+    LLM_STREAM_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=600)
+    LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
+    LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
+
     # JWT contract. Priority 3 will enforce issuer and audience at verification.
     SECRET_KEY: str
     ALGORITHM: Literal["HS256"] = "HS256"

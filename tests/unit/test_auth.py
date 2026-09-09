@@ -177,7 +177,8 @@ def test_wrong_algorithm_and_signature_return_stable_401(auth_module):
 
     _assert_unauthorized(auth_module, wrong_algorithm_token)
     _assert_unauthorized(auth_module, wrong_signature_token)
-    _assert_unauthorized(auth_module, token[:-1] + ("a" if token[-1] != "a" else "b"))
+    header_and_payload, signature = token.rsplit(".", 1)
+    _assert_unauthorized(auth_module, f"{header_and_payload}.{'A' * len(signature)}")
 
 
 def test_http_exception_is_not_rewritten_to_500(auth_module, monkeypatch):

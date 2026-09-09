@@ -23,7 +23,8 @@ def send_new_email(
     subject: str,
     body: str,
     cc: List[str] = None,
-    bcc: List[str] = None
+    bcc: List[str] = None,
+    raise_on_error: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Sends a completely new email (not a reply).
@@ -61,9 +62,13 @@ def send_new_email(
         return sent_message
     except HttpError as error:
         logger.error(f"Failed to send email: {error}")
+        if raise_on_error:
+            raise
         return None
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while sending email: {e}")
+    except Exception:
+        logger.exception("An unexpected error occurred while sending email")
+        if raise_on_error:
+            raise
         return None
 
 def send_reply_email(
@@ -72,7 +77,8 @@ def send_reply_email(
     original_email_id: str,
     reply_body: str,
     reply_to_all: bool = True,
-    additional_recipients: List[str] = None
+    additional_recipients: List[str] = None,
+    raise_on_error: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Sends a reply to a specific email.
@@ -177,9 +183,13 @@ def send_reply_email(
 
     except HttpError as error:
         logger.error(f"Failed to send reply for email ID {original_email_id}: {error}")
+        if raise_on_error:
+            raise
         return None
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while sending reply: {e}")
+    except Exception:
+        logger.exception("An unexpected error occurred while sending reply")
+        if raise_on_error:
+            raise
         return None
 
 

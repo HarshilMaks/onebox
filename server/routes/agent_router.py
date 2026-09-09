@@ -3,7 +3,7 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from googleapiclient.discovery import Resource
 from pydantic import BaseModel
@@ -16,6 +16,11 @@ from server.schemas import (
     AgentStreamEvent,
     AgentSuccessResponse,
     PendingActionResponse,
+)
+from server.integrations.llm import (
+    LlmOperationInternal,
+    LlmOperationTimeout,
+    LlmOperationUnavailable,
 )
 from server.services.pending_actions import (
     PendingActionInvalidState,
@@ -47,6 +52,19 @@ router = APIRouter(tags=["AI Agents"])
 
 class AgentQuery(BaseModel):
     input: str
+
+
+def _agent_provider_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, LlmOperationTimeout):
+        status_code, code, detail = 504, "llm_timeout", "The agent response timed out. Please try again."
+    elif isinstance(error, LlmOperationUnavailable):
+        status_code, code, detail = 503, "llm_unavailable", "The agent is temporarily unavailable."
+    else:
+        status_code, code, detail = 502, "llm_internal", "The agent could not complete this request."
+    return HTTPException(
+        status_code=status_code,
+        detail=AgentErrorResponse(error=code, detail=detail).model_dump(),
+    )
 
 
 async def _action_provider_services(
@@ -149,6 +167,8 @@ async def invoke_executive_agent_endpoint(
         return {"result": result}
     except HTTPException:
         raise
+    except (LlmOperationInternal, LlmOperationTimeout, LlmOperationUnavailable) as exc:
+        raise _agent_provider_http_error(exc) from None
     except Exception:
         logger.exception("Error in executive agent endpoint for user %s", user_info.get("user_id"))
         raise HTTPException(
@@ -170,6 +190,8 @@ async def invoke_general_agent_endpoint(
         return {"result": await agent.run(input_query=query.input)}
     except HTTPException:
         raise
+    except (LlmOperationInternal, LlmOperationTimeout, LlmOperationUnavailable) as exc:
+        raise _agent_provider_http_error(exc) from None
     except Exception:
         logger.exception("Error in general agent endpoint for user %s", user_info.get("user_id"))
         raise HTTPException(
@@ -198,9 +220,8 @@ def _format_stream_event(
 @router.post("/generate-stream/")
 async def invoke_general_agent_stream_endpoint(
     query: AgentQuery,
+    request: Request,
     user_info: dict = Depends(get_current_user_info),
-    gmail_service: Resource = Depends(get_gmail_service),
-    tasks_service: Resource = Depends(get_tasks_service),
     google_connection: GoogleConnection = Depends(get_connected_google_connection),
 ):
     """Stream structured, user-safe agent events as JSON SSE data frames."""
@@ -209,26 +230,62 @@ async def invoke_general_agent_stream_endpoint(
         user_email = google_connection.google_email
 
         async def stream_response_generator():
+            iterator = agent.run(
+                input_query=query.input,
+                current_user_email=user_email,
+            ).__aiter__()
+            terminal_sent = False
+            next_event: asyncio.Task | None = None
             try:
-                async for event_type, content, error_code in agent.run(
-                    input_query=query.input,
-                    gmail_service=gmail_service,
-                    tasks_service=tasks_service,
-                    current_user_email=user_email,
-                ):
+                next_event = asyncio.create_task(anext(iterator))
+                while True:
+                    done, _ = await asyncio.wait({next_event}, timeout=15)
+                    if not done:
+                        if await request.is_disconnected():
+                            return
+                        yield ": heartbeat\n\n"
+                        continue
+
+                    try:
+                        event_type, content, error_code = next_event.result()
+                    except StopAsyncIteration:
+                        break
+                    next_event = asyncio.create_task(anext(iterator))
+
+                    if await request.is_disconnected():
+                        return
                     yield _format_stream_event(event_type, content, error_code)
                     if event_type == "error":
+                        terminal_sent = True
                         return
-                yield _format_stream_event("done", "")
+
+                if not terminal_sent and not await request.is_disconnected():
+                    yield _format_stream_event("done", "")
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Error while streaming agent response for user %s", user_info.get("user_id"))
-                yield _format_stream_event(
-                    "error",
-                    "The agent stream failed unexpectedly.",
-                    "stream_execution_failed",
-                )
+                if not await request.is_disconnected():
+                    yield _format_stream_event(
+                        "error",
+                        "The agent stream failed unexpectedly.",
+                        "llm_internal",
+                    )
+            finally:
+                if next_event is not None and not next_event.done():
+                    next_event.cancel()
+                    await asyncio.gather(next_event, return_exceptions=True)
+                await iterator.aclose()
 
-        return StreamingResponse(stream_response_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream_response_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
     except HTTPException:
         raise
     except Exception:

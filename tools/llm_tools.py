@@ -5,8 +5,7 @@ from typing import Dict, List, Optional
 
 import pytz
 from googleapiclient.discovery import Resource
-from googleapiclient.errors import HttpError
-
+from server.integrations.google import GoogleProviderError, execute_google_request
 from server.services.pending_actions import (
     ACTION_CREATE_EVENT,
     ACTION_CREATE_TASK,
@@ -15,9 +14,8 @@ from server.services.pending_actions import (
     create_pending_action,
     resolve_reply_target,
 )
-from tools.email.send_gmail import create_gmail_draft
 from tools.logging_config import setup_logging
-from tools.utils import format_datetime_with_timezone
+from tools.utils import create_raw_message, format_datetime_with_timezone
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -121,116 +119,116 @@ async def send_reply_to_user(
     return _action_request_response(action)
 
 
-def create_draft(
+async def create_draft(
     gmail_service: Resource,
     current_user_email: str,
     recipient_email: str,
     subject: str,
     email_body: str,
 ) -> bool:
-    """Create a reviewable Gmail draft; drafts do not send external communication."""
-    logger.info("Creating draft from %s to %s", current_user_email, recipient_email)
+    """Create a reviewable Gmail draft through the bounded Google adapter."""
     if not gmail_service or not current_user_email:
         return False
+    message = create_raw_message(
+        current_user_email,
+        [recipient_email],
+        subject,
+        email_body,
+    )
+    request = gmail_service.users().drafts().create(
+        userId="me",
+        body={"message": message},
+    )
     try:
-        draft_result = create_gmail_draft(
-            gmail_service=gmail_service,
-            sender_email=current_user_email,
-            to=[recipient_email],
-            subject=subject,
-            body=email_body,
-        )
-        return bool(draft_result and draft_result.get("id"))
-    except HttpError as error:
-        logger.error("API HTTP error creating draft: %s", error)
+        draft_result = await execute_google_request(request, resource=gmail_service)
+    except GoogleProviderError:
+        logger.warning("Gmail draft creation failed", exc_info=True)
         return False
-    except Exception:
-        logger.exception("Error creating draft")
-        return False
+    return bool(draft_result and draft_result.get("id"))
 
 
-def mark_as_read(gmail_service: Resource, message_id: str) -> bool:
+async def mark_as_read(gmail_service: Resource, message_id: str) -> bool:
     if not gmail_service:
         return False
+    request = gmail_service.users().messages().modify(
+        userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
+    )
     try:
-        gmail_service.users().messages().modify(
-            userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
-        ).execute()
+        await execute_google_request(request, resource=gmail_service)
         return True
-    except HttpError as error:
-        logger.error("API HTTP error marking %s as read: %s", message_id, error)
-        return False
-    except Exception:
-        logger.exception("Error marking %s as read", message_id)
+    except GoogleProviderError:
+        logger.warning("Unable to mark %s as read", message_id, exc_info=True)
         return False
 
 
-def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
+async def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
     if not gmail_service:
         return False
+    request = gmail_service.users().messages().modify(
+        userId="me", id=message_id, body={"addLabelIds": ["UNREAD"]}
+    )
     try:
-        gmail_service.users().messages().modify(
-            userId="me", id=message_id, body={"addLabelIds": ["UNREAD"]}
-        ).execute()
+        await execute_google_request(request, resource=gmail_service)
         return True
-    except HttpError as error:
-        logger.error("API HTTP error marking %s as unread: %s", message_id, error)
-        return False
-    except Exception:
-        logger.exception("Error marking %s as unread", message_id)
+    except GoogleProviderError:
+        logger.warning("Unable to mark %s as unread", message_id, exc_info=True)
         return False
 
 
-def get_calendar_events(
+async def get_calendar_events(
     calendar_service: Resource,
     date_strs: List[str],
     target_timezone: str = "Asia/Kolkata",
 ) -> Dict[str, str]:
     if not calendar_service:
-        return {date_str: "Error: Calendar service unavailable" for date_str in date_strs}
+        return {date_str: "Calendar service unavailable" for date_str in date_strs}
 
     try:
         tz = pytz.timezone(target_timezone)
     except Exception:
-        return {date_str: f"Error: Invalid timezone '{target_timezone}'" for date_str in date_strs}
+        return {date_str: "Invalid timezone" for date_str in date_strs}
 
     results: Dict[str, str] = {}
     for date_str in date_strs:
         try:
             day = datetime.strptime(date_str, "%d-%m-%Y").date()
-            start_local = tz.localize(datetime.combine(day, datetime_time.min))
-            end_local = tz.localize(datetime.combine(day, datetime_time.max))
-            events_result = calendar_service.events().list(
-                calendarId="primary",
-                timeMin=start_local.astimezone(pytz.utc).isoformat(),
-                timeMax=end_local.astimezone(pytz.utc).isoformat(),
-                singleEvents=True,
-                orderBy="startTime",
-            ).execute()
-            events = events_result.get("items", [])
-            if not events:
-                results[date_str] = "No events found for this day."
-                continue
-
-            lines = [f"Events for {date_str}:"]
-            for event in events:
-                summary = event.get("summary", "No Title")
-                start_data = event.get("start", {})
-                end_data = event.get("end", {})
-                if "dateTime" in start_data:
-                    start = format_datetime_with_timezone(start_data["dateTime"], target_timezone)
-                    end = format_datetime_with_timezone(end_data["dateTime"], target_timezone)
-                    lines.append(f"- {summary} (from {start} to {end})")
-                elif "date" in start_data:
-                    lines.append(f"- {summary} (All day on {start_data['date']})")
-                else:
-                    lines.append(f"- {summary} (Time information unavailable)")
-            results[date_str] = "\n".join(lines)
         except ValueError:
-            results[date_str] = "Error: Invalid date format. Use 'dd-mm-yyyy'."
-        except HttpError as error:
-            results[date_str] = f"Error: API error ({error.resp.status})."
-        except Exception:
-            logger.exception("Unexpected calendar lookup error for %s", date_str)
-            results[date_str] = "Error: An unexpected error occurred."
+            results[date_str] = "Invalid date format. Use 'dd-mm-yyyy'."
+            continue
+
+        start_local = tz.localize(datetime.combine(day, datetime_time.min))
+        end_local = tz.localize(datetime.combine(day, datetime_time.max))
+        request = calendar_service.events().list(
+            calendarId="primary",
+            timeMin=start_local.astimezone(pytz.utc).isoformat(),
+            timeMax=end_local.astimezone(pytz.utc).isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        try:
+            events_result = await execute_google_request(request, resource=calendar_service)
+        except GoogleProviderError:
+            logger.warning("Calendar lookup failed for %s", date_str, exc_info=True)
+            results[date_str] = "Calendar service is temporarily unavailable."
+            continue
+
+        events = events_result.get("items", [])
+        if not events:
+            results[date_str] = "No events found for this day."
+            continue
+
+        lines = [f"Events for {date_str}:"]
+        for event in events:
+            summary = event.get("summary", "No Title")
+            start_data = event.get("start", {})
+            end_data = event.get("end", {})
+            if "dateTime" in start_data:
+                start = format_datetime_with_timezone(start_data["dateTime"], target_timezone)
+                end = format_datetime_with_timezone(end_data["dateTime"], target_timezone)
+                lines.append(f"- {summary} (from {start} to {end})")
+            elif "date" in start_data:
+                lines.append(f"- {summary} (All day on {start_data['date']})")
+            else:
+                lines.append(f"- {summary} (Time information unavailable)")
+        results[date_str] = "\n".join(lines)
     return results

@@ -1,56 +1,62 @@
 import json
 
 import pytest
-import redis
 
 from server import oauth_state
+from server.integrations.redis import RedisAdapterError
 
 
-class FakeRedis:
+class FakeRedisAdapter:
     def __init__(self):
         self.values = {}
+        self.consume_calls = 0
 
-    def setex(self, key, _ttl, value):
+    async def setex(self, key, _ttl, value):
         self.values[key] = value
 
-    def eval(self, _script, _keys, key):
+    async def consume(self, _script, key):
+        self.consume_calls += 1
         return self.values.pop(key, None)
 
 
-class UnavailableRedis:
-    def setex(self, *_args):
-        raise redis.RedisError("unavailable")
+class UnavailableRedisAdapter:
+    async def setex(self, *_args):
+        raise RedisAdapterError()
 
-    def eval(self, *_args):
-        raise redis.RedisError("unavailable")
+    async def consume(self, *_args):
+        raise RedisAdapterError()
 
 
-def test_oauth_state_is_email_bound_and_consumed_once(monkeypatch):
-    store = FakeRedis()
-    monkeypatch.setattr(oauth_state, "redis_client", store)
+@pytest.mark.asyncio
+async def test_oauth_state_is_email_bound_and_consumed_once(monkeypatch):
+    store = FakeRedisAdapter()
+    monkeypatch.setattr(oauth_state, "get_redis_adapter", lambda: store)
 
-    state = oauth_state.create_oauth_state("user-id", "Owner@Example.com")
-    first = oauth_state.consume_oauth_state(state)
+    state = await oauth_state.create_oauth_state("user-id", "Owner@Example.com")
+    first = await oauth_state.consume_oauth_state(state)
 
     assert first is not None
     assert first.user_id == "user-id"
     assert first.expected_email == "owner@example.com"
-    assert oauth_state.consume_oauth_state(state) is None
+    assert await oauth_state.consume_oauth_state(state) is None
+    assert store.consume_calls == 2
 
 
-def test_expired_or_malformed_oauth_state_is_rejected(monkeypatch):
-    store = FakeRedis()
-    monkeypatch.setattr(oauth_state, "redis_client", store)
+@pytest.mark.asyncio
+async def test_expired_or_malformed_oauth_state_is_rejected(monkeypatch):
+    store = FakeRedisAdapter()
+    monkeypatch.setattr(oauth_state, "get_redis_adapter", lambda: store)
 
-    assert oauth_state.consume_oauth_state("missing") is None
+    assert await oauth_state.consume_oauth_state("missing") is None
     store.values["oauth_state:malformed"] = json.dumps({"user_id": "user-id"})
-    assert oauth_state.consume_oauth_state("malformed") is None
+    assert await oauth_state.consume_oauth_state("malformed") is None
 
 
-def test_oauth_state_store_outage_fails_closed(monkeypatch):
-    monkeypatch.setattr(oauth_state, "redis_client", UnavailableRedis())
+@pytest.mark.asyncio
+async def test_oauth_state_store_outage_fails_closed(monkeypatch):
+    monkeypatch.setattr(oauth_state, "get_redis_adapter", lambda: UnavailableRedisAdapter())
 
     with pytest.raises(oauth_state.OAuthStateStoreUnavailable):
-        oauth_state.create_oauth_state("user-id", "owner@example.com")
+        await oauth_state.create_oauth_state("user-id", "owner@example.com")
     with pytest.raises(oauth_state.OAuthStateStoreUnavailable):
-        oauth_state.consume_oauth_state("state")
+        await oauth_state.consume_oauth_state("state")

@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import json
 import logging
@@ -11,6 +10,10 @@ from googleapiclient.errors import HttpError
 from agents import ExecutiveAgent
 from server.config import settings
 from server.database import AsyncSessionLocal as SessionLocal
+from server.integrations.google import (
+    GoogleProviderError,
+    execute_google_request as execute_google_provider_request,
+)
 from server.logging_config import setup_logging
 from server.services.credentials import (
     CredentialEncryptionUnavailable,
@@ -55,9 +58,9 @@ def should_process_email(email_content: Dict[str, Any]) -> bool:
     return True
 
 
-async def execute_google_request(request):
-    """Run a synchronous google-api-python-client request off the event loop."""
-    return await asyncio.to_thread(request.execute)
+async def execute_google_request(request, gmail_service=None):
+    """Run one Gmail request through the bounded provider adapter."""
+    return await execute_google_provider_request(request, resource=gmail_service)
 
 
 async def initialize_gmail_service():
@@ -105,49 +108,37 @@ def get_gmail_service_instance():
     return GMAIL_SERVICE
 
 
-def _setup_gmail_watch_sync(gmail_service):
-    if not gmail_service:
-        return None
-    topic_name = settings.PUBSUB_TOPIC
-    if not topic_name:
-        logger.error("PUBSUB_TOPIC is not configured")
+async def setup_gmail_watch(gmail_service):
+    """Set up the Gmail watch without blocking an async route or lifespan."""
+    if not gmail_service or not settings.PUBSUB_TOPIC:
+        logger.error("Gmail watch is unavailable because its service or topic is missing")
         return None
     try:
-        return gmail_service.users().watch(
+        request = gmail_service.users().watch(
             userId="me",
             body={
                 "labelIds": ["INBOX"],
-                "topicName": topic_name,
+                "topicName": settings.PUBSUB_TOPIC,
                 "labelFilterAction": "include",
             },
-        ).execute()
-    except HttpError:
+        )
+        return await execute_google_request(request, gmail_service)
+    except GoogleProviderError:
         logger.exception("Failed to set up Gmail watch")
         return None
-    except Exception:
-        logger.exception("Unexpected failure setting up Gmail watch")
-        return None
-
-
-async def setup_gmail_watch(gmail_service):
-    """Set up the Gmail watch without blocking an async route or lifespan."""
-    return await asyncio.to_thread(_setup_gmail_watch_sync, gmail_service)
-
-
-def _stop_gmail_watch_sync(gmail_service) -> bool:
-    if not gmail_service:
-        return False
-    try:
-        gmail_service.users().stop(userId="me").execute()
-        return True
-    except HttpError:
-        logger.exception("Failed to stop Gmail watch")
-        return False
 
 
 async def stop_gmail_watch(gmail_service) -> bool:
-    """Stop the Gmail watch without blocking shutdown."""
-    return await asyncio.to_thread(_stop_gmail_watch_sync, gmail_service)
+    """Stop the Gmail watch through the bounded adapter during shutdown."""
+    if not gmail_service:
+        return False
+    try:
+        request = gmail_service.users().stop(userId="me")
+        await execute_google_request(request, gmail_service)
+        return True
+    except GoogleProviderError:
+        logger.exception("Failed to stop Gmail watch")
+        return False
 
 def extract_and_decode_message(payload: Dict) -> Optional[Dict]:
     """Extract and decode the message data from a Pub/Sub notification."""
@@ -191,7 +182,7 @@ async def process_email_notification(notification_data: Dict[str, Any], gmail_se
             q='is:unread in:inbox -category:promotions -category:social -from:noreply',
             maxResults=1,
         )
-        results = await execute_google_request(request)
+        results = await execute_google_request(request, gmail_service_param)
         
         messages = results.get('messages', [])
         if not messages:
@@ -221,7 +212,7 @@ async def fetch_and_process_email(gmail_service_param, message_id: str): # Pass 
         request = gmail_service_param.users().messages().get(
             userId='me', id=message_id, format='full'
         )
-        message = await execute_google_request(request)
+        message = await execute_google_request(request, gmail_service_param)
         logger.info(f"Fetched email ID: {message_id}")
         
         email_content = extract_email_content(message)

@@ -1,12 +1,13 @@
 """Server-side storage for one-time, owner-bound OAuth state tokens."""
+
+from __future__ import annotations
+
 import json
 import secrets
 from dataclasses import dataclass
-from typing import Optional
 
-import redis
+from server.integrations.redis import RedisAdapterError, get_redis_adapter
 
-from server.redis_cache import redis_client
 
 _STATE_KEY_PREFIX = "oauth_state:"
 _STATE_TTL_SECONDS = 600
@@ -39,7 +40,7 @@ def normalize_email(email: str) -> str:
     return normalized
 
 
-def create_oauth_state(user_id: str, expected_email: str) -> str:
+async def create_oauth_state(user_id: str, expected_email: str) -> str:
     """Persist an opaque, one-time state bound to the initiating user and email."""
     state = secrets.token_urlsafe(32)
     binding = {
@@ -47,33 +48,31 @@ def create_oauth_state(user_id: str, expected_email: str) -> str:
         "expected_email": normalize_email(expected_email),
     }
     try:
-        redis_client.setex(
+        await get_redis_adapter().setex(
             f"{_STATE_KEY_PREFIX}{state}",
             _STATE_TTL_SECONDS,
             json.dumps(binding, separators=(",", ":")),
         )
-    except redis.RedisError as exc:
+    except RedisAdapterError as exc:
         raise OAuthStateStoreUnavailable() from exc
     return state
 
 
-def consume_oauth_state(state: str) -> Optional[OAuthStateBinding]:
+async def consume_oauth_state(state: str) -> OAuthStateBinding | None:
     """Atomically retrieve and delete a one-time OAuth state binding.
 
-    Legacy state values that stored only a user ID are rejected because they
-    cannot prove the Google account selected in this flow belongs to the
-    initiating application identity.
+    A timeout or Redis failure is fail-closed: callers must not retry an
+    ambiguous consume operation or proceed to token exchange.
     """
     if not state:
         return None
 
     try:
-        raw_binding = redis_client.eval(
+        raw_binding = await get_redis_adapter().consume(
             _GETDEL_LUA,
-            1,
             f"{_STATE_KEY_PREFIX}{state}",
         )
-    except redis.RedisError as exc:
+    except RedisAdapterError as exc:
         raise OAuthStateStoreUnavailable() from exc
 
     if not raw_binding:

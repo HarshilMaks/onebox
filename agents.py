@@ -1,12 +1,18 @@
-import logging
-import asyncio
-from functools import partial
+from asyncio import CancelledError
 import datetime
-import yaml # <--- ADD THIS IMPORT
+import inspect
+import logging
+from functools import partial
+import yaml  # YAML profile parsing is retained for the current agent contract.
 from typing import Optional, List, AsyncGenerator, Any, Callable, Dict
 from googleapiclient.discovery import Resource
 
 from clients.base import Agent
+from server.integrations.llm import (
+    LlmOperationInternal,
+    LlmOperationTimeout,
+    LlmOperationUnavailable,
+)
 from google.genai.types import (
     GenerateContentConfig, Content, Part,
     Tool, FunctionDeclaration, Schema, Type
@@ -310,8 +316,7 @@ class ExecutiveAgent(Agent):
         max_turns = 5 
         for turn in range(max_turns):
             logger.debug(f"Turn {turn+1}/{max_turns}. Calling LLM with history length {len(history)}.")
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.provider.generate(
                 model=self.model_name,
                 contents=history,
                 config=gen_config,
@@ -319,7 +324,7 @@ class ExecutiveAgent(Agent):
 
             if not response.candidates:
                 logger.warning("No candidates received from LLM.")
-                return "Error: No response from LLM."
+                raise LlmOperationInternal()
                 
             candidate = response.candidates[0]
             
@@ -343,10 +348,10 @@ class ExecutiveAgent(Agent):
                     if function_name in self.available_python_tools:
                         python_function_to_call = self.available_python_tools[function_name]
                         try:
-                            if asyncio.iscoroutinefunction(python_function_to_call):
-                                api_response = await python_function_to_call(**args)
-                            else:
-                                api_response = await asyncio.to_thread(python_function_to_call, **args)
+                            tool_result = python_function_to_call(**args)
+                            if not inspect.isawaitable(tool_result):
+                                raise RuntimeError("Agent tool must be asynchronous")
+                            api_response = await tool_result
                             
                             # --- Start of POST-TOOL EXECUTION: Generate human-readable response ---
                             final_response_message = ""
@@ -414,14 +419,13 @@ class ExecutiveAgent(Agent):
                                     }
                                 )
                             )
-                        except Exception as e:
-                            logger.error(f"Error executing tool {function_name}: {e}", exc_info=True)
-                            error_message = f"❌ Couldn't execute tool '{function_name}' due to an internal error: {str(e)}. Would you like me to try a different approach?"
+                        except Exception:
+                            logger.exception("Error executing tool %s", function_name)
                             function_response_parts.append(
                                 Part(
                                     function_response={
                                         "name": function_name,
-                                        "response": {"error": error_message}, 
+                                        "response": {"error": "tool_unavailable"},
                                     }
                                 )
                             )
@@ -479,8 +483,7 @@ class GeneralAgent(Agent):
         )
 
         try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.provider.generate(
                 model=self.model_name,
                 contents=history,
                 config=gen_config,
@@ -513,12 +516,11 @@ class GeneralAgentStreamer(Agent):
         self.available_python_tools = {}
         function_declarations_for_tool_config = []
         
-        if gmail_service and current_user_email:
+        if current_user_email:
             self.available_python_tools["send_email"] = partial(send_email, self.user_id, current_user_email)
             function_declarations_for_tool_config.append(send_email_func_decl)
-        if tasks_service:
-            self.available_python_tools["create_task"] = partial(create_task, self.user_id)
-            function_declarations_for_tool_config.append(create_task_func_decl)
+        self.available_python_tools["create_task"] = partial(create_task, self.user_id)
+        function_declarations_for_tool_config.append(create_task_func_decl)
         
         if not function_declarations_for_tool_config:
             return []
@@ -561,16 +563,14 @@ class GeneralAgentStreamer(Agent):
         )
 
         try:
-            stream_iterator = self.client.models.generate_content_stream(
-                model=self.model_name,
-                contents=history,
-                config=gen_config,
-            )
-
             full_function_call_parts = []
             active_function_call_name = None
 
-            for chunk in stream_iterator:
+            async for chunk in self.provider.iter_stream(
+                model=self.model_name,
+                contents=history,
+                config=gen_config,
+            ):
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     for part in chunk.candidates[0].content.parts:
                         if part.function_call:
@@ -584,7 +584,6 @@ class GeneralAgentStreamer(Agent):
                     if chunk_text:
                         yield "token", chunk_text, None
 
-                await asyncio.sleep(0)
 
             if full_function_call_parts:
                 final_fc_name = full_function_call_parts[0].function_call.name
@@ -598,10 +597,10 @@ class GeneralAgentStreamer(Agent):
                 if final_fc_name in self.available_python_tools:
                     python_function_to_call = self.available_python_tools[final_fc_name]
                     try:
-                        if asyncio.iscoroutinefunction(python_function_to_call):
-                            api_response = await python_function_to_call(**merged_args)
-                        else:
-                            api_response = await asyncio.to_thread(python_function_to_call, **merged_args)
+                        tool_result = python_function_to_call(**merged_args)
+                        if not inspect.isawaitable(tool_result):
+                            raise RuntimeError("Agent tool must be asynchronous")
+                        api_response = await tool_result
 
                         if not isinstance(api_response, (dict, str, bool, int, float, list, type(None))):
                             api_response = str(api_response)
@@ -612,23 +611,24 @@ class GeneralAgentStreamer(Agent):
                         history.append(Content(parts=full_function_call_parts, role="model"))
                         history.append(Content(parts=[function_response_part_obj], role="tool"))
 
-                        final_stream_iterator = self.client.models.generate_content_stream(
+                        async for final_chunk in self.provider.iter_stream(
                             model=self.model_name,
                             contents=history,
                             config=gen_config,
-                        )
-                        for final_chunk in final_stream_iterator:
+                        ):
                             final_chunk_text = getattr(final_chunk, "text", None)
                             if final_chunk_text:
                                 yield "tool_result", final_chunk_text, None
-                            await asyncio.sleep(0)
+                    except CancelledError:
+                        raise
                     except Exception:
                         logger.exception("Streamed tool execution failed for %s", final_fc_name)
                         yield (
                             "error",
                             "The requested tool could not complete. Please try again.",
-                            "tool_execution_failed",
+                            "tool_unavailable",
                         )
+                        return
                 else:
                     logger.warning("Streamed function call was not declared: %s", final_fc_name)
                     yield (
@@ -636,10 +636,24 @@ class GeneralAgentStreamer(Agent):
                         "The agent requested an unavailable tool.",
                         "unknown_tool_requested",
                     )
-        except Exception:
+        except CancelledError:
+            raise
+        except LlmOperationTimeout:
+            yield (
+                "error",
+                "The agent response timed out. Please try again.",
+                "llm_timeout",
+            )
+        except LlmOperationUnavailable:
+            yield (
+                "error",
+                "The agent is temporarily unavailable. Please try again.",
+                "llm_unavailable",
+            )
+        except LlmOperationInternal:
             logger.exception("General agent stream failed for user %s", self.user_id)
             yield (
                 "error",
                 "The agent could not complete the stream. Please try again.",
-                "agent_stream_failed",
+                "llm_internal",
             )

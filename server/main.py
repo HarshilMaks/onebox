@@ -5,6 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.config import settings
+from server.integrations.google import close_google_adapter
+from server.integrations.llm import close_llm_adapter
+from server.integrations.redis import close_redis_adapter
 from server.logging_config import setup_logging
 from server.routes import agent_oauth, agent_router, google_mail, push_router
 from server.schemas import ReadinessResponse
@@ -20,25 +23,31 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start only the services enabled for this validated process role."""
-    if settings.runs_automation:
-        logger.info("Starting Gmail automation service")
-        initialized = await initialize_gmail_service()
-        if initialized:
-            logger.info("Gmail automation service started")
+    """Start enabled services and always release provider resources on shutdown."""
+    try:
+        if settings.runs_automation:
+            logger.info("Starting Gmail automation service")
+            initialized = await initialize_gmail_service()
+            if initialized:
+                logger.info("Gmail automation service started")
+            else:
+                logger.warning("Gmail automation service did not start")
         else:
-            logger.warning("Gmail automation service did not start")
-    else:
-        logger.info("Starting API service with Gmail automation disabled")
+            logger.info("Starting API service with Gmail automation disabled")
 
-    yield
-
-    if settings.runs_automation:
-        logger.info("Stopping Gmail automation service")
-        gmail_service = get_gmail_service_instance()
-        if gmail_service:
-            await stop_gmail_watch(gmail_service)
-        logger.info("Gmail automation service stopped")
+        yield
+    finally:
+        try:
+            if settings.runs_automation:
+                logger.info("Stopping Gmail automation service")
+                gmail_service = get_gmail_service_instance()
+                if gmail_service:
+                    await stop_gmail_watch(gmail_service)
+                logger.info("Gmail automation service stopped")
+        finally:
+            await close_redis_adapter()
+            await close_google_adapter()
+            await close_llm_adapter()
 
 
 app = FastAPI(
