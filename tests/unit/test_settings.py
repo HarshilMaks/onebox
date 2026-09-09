@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
@@ -208,16 +208,20 @@ def test_configuration_import_uses_repository_root_not_current_directory(tmp_pat
     assert result.returncode == 0, result.stderr
 
 
-def test_api_lifespan_does_not_initialize_gmail_automation(settings_class, monkeypatch):
+def test_api_lifespan_does_not_start_gmail_automation_worker(settings_class, monkeypatch):
     # Import only after the fixture has supplied a complete API configuration.
     main = importlib.import_module("server.main")
-    initialize = AsyncMock(return_value=True)
-    monkeypatch.setattr(main, "initialize_gmail_service", initialize)
-    monkeypatch.setattr(main, "settings", SimpleNamespace(runs_automation=False))
+    create_task = Mock()
+    monkeypatch.setattr(main.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        main,
+        "settings",
+        SimpleNamespace(runs_automation_worker=False, SERVICE_ROLE=main.ServiceRole.API),
+    )
 
     async def exercise_lifespan():
         async with main.lifespan(main.app):
             pass
 
     asyncio.run(exercise_lifespan())
-    initialize.assert_not_awaited()
+    create_task.assert_not_called()

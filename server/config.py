@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
 
+    # Durable Gmail Pub/Sub ingestion/worker limits. Jobs are PostgreSQL-backed
+    # and every lease is finite so a crash can be reconciled safely.
+    PUBSUB_MAX_ENVELOPE_BYTES: int = Field(default=65_536, ge=1_024, le=1_048_576)
+    GMAIL_NOTIFICATION_POLL_SECONDS: float = Field(default=1.0, gt=0, le=60)
+    GMAIL_NOTIFICATION_LEASE_SECONDS: int = Field(default=120, ge=10, le=3_600)
+    GMAIL_NOTIFICATION_MAX_ATTEMPTS: int = Field(default=5, ge=1, le=100)
+    GMAIL_RESYNC_MAX_MESSAGES: int = Field(default=100, ge=1, le=1_000)
+    GMAIL_WATCH_RENEWAL_SECONDS: int = Field(default=86_400, ge=300, le=604_800)
+
     # JWT contract. Priority 3 will enforce issuer and audience at verification.
     SECRET_KEY: str
     ALGORITHM: Literal["HS256"] = "HS256"
@@ -288,9 +297,6 @@ class Settings(BaseSettings):
         }:
             raise ValueError("SERVICE_ROLE=combined is allowed only in development or test")
 
-        if self.SERVICE_ROLE is ServiceRole.API and self.AUTOMATION_ENABLED:
-            raise ValueError("AUTOMATION_ENABLED requires SERVICE_ROLE=automation_worker or combined")
-
         if self.SERVICE_ROLE is ServiceRole.AUTOMATION_WORKER and not self.AUTOMATION_ENABLED:
             raise ValueError("SERVICE_ROLE=automation_worker requires AUTOMATION_ENABLED=true")
 
@@ -353,6 +359,10 @@ class Settings(BaseSettings):
 
     @property
     def runs_automation(self) -> bool:
+        return self.runs_automation_worker
+
+    @property
+    def runs_automation_worker(self) -> bool:
         return self.AUTOMATION_ENABLED and self.SERVICE_ROLE in {
             ServiceRole.AUTOMATION_WORKER,
             ServiceRole.COMBINED,

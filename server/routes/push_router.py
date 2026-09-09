@@ -1,28 +1,27 @@
-import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from google.auth import exceptions as google_auth_exceptions
 from google.oauth2 import id_token
-from googleapiclient.errors import HttpError
 
 from server.config import settings
-from server.integrations.google import (
-    GoogleProviderError,
-    google_auth_request,
-    run_google_operation,
-)
+from server.integrations.google import GoogleProviderError, google_auth_request, run_google_operation
 from server.logging_config import setup_logging
 from server.schemas import GlobalGmailHealthResponse
-from server.services.mail import (
-    execute_google_request,
-    extract_and_decode_message,
-    fetch_and_process_email,
-    get_gmail_service_instance,
-    process_email_notification,
-    setup_gmail_watch,
+from server.services.credentials import (
+    CredentialEncryptionUnavailable,
+    GoogleCredentialsUnavailable,
+    GoogleReconnectRequired,
+)
+from server.services.notification_jobs import (
+    AutomationBaselineUnavailable,
+    NotificationValidationError,
+    automation_status,
+    enqueue_notification,
+    parse_notification_envelope,
 )
 from server.services.setup_google import get_current_user_info
+from server.workers.mail_notifications import renew_automation_watch
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -58,10 +57,7 @@ async def require_pubsub_push_auth(request: Request) -> dict:
         )
     except GoogleProviderError:
         logger.warning("Pub/Sub push token verification is temporarily unavailable", exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail="Pub/Sub push authentication is temporarily unavailable",
-        ) from None
+        raise HTTPException(status_code=503, detail="Pub/Sub push authentication is temporarily unavailable") from None
     except Exception:
         logger.warning("Rejected Pub/Sub push request with an invalid OIDC token")
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication") from None
@@ -74,171 +70,112 @@ async def require_pubsub_push_auth(request: Request) -> dict:
     ):
         logger.warning("Rejected Pub/Sub push request from an unexpected principal")
         raise HTTPException(status_code=403, detail="Pub/Sub push principal is not authorized")
-
     return claims
 
 
 async def require_global_gmail_operator(
     user_info: dict = Depends(get_current_user_info),
 ) -> dict:
-    """Authorize only the JWT owner of the configured global Gmail account."""
+    """Authorize only the JWT owner of the configured automation mailbox."""
     global_owner_id = settings.AUTOMATION_OWNER_ID
     if global_owner_id is None:
         logger.error("Global Gmail operator identity is not configured")
         raise HTTPException(status_code=503, detail="Global Gmail operator is not configured")
-
     if user_info["user_id"] != global_owner_id:
         logger.warning("Denied global Gmail operator request from a non-owner")
         raise HTTPException(status_code=403, detail="Not authorized for global Gmail operations")
-
     return user_info
 
-async def get_active_gmail_service(
-    gmail_service = Depends(get_gmail_service_instance)
-):
-    """
-    Dependency that retrieves the globally initialized Gmail service.
-    Raises HTTPException if the service is not available (e.g., failed initialization).
-    """
-    if gmail_service is None:
-        logger.error(
-            "Attempted to use Gmail service, but it's not initialized. "
-            "This likely means AGENT_USER_ID_FOR_SERVICE was not set or token fetch failed at startup."
-        )
-        raise HTTPException(
-            status_code=503, # Service Unavailable
-            detail="Gmail service is not available. Please check server logs for initialization errors."
-        )
-    return gmail_service
 
-@router.post("/notifications")
+async def _bounded_body(request: Request) -> bytes:
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > settings.PUBSUB_MAX_ENVELOPE_BYTES:
+                raise HTTPException(status_code=413, detail="Notification body is too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid notification body") from None
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > settings.PUBSUB_MAX_ENVELOPE_BYTES:
+            raise HTTPException(status_code=413, detail="Notification body is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/notifications", status_code=204)
 async def receive_gmail_notification(
     request: Request,
-    background_tasks: BackgroundTasks,
     _push_claims: dict = Depends(require_pubsub_push_auth),
-    gmail_service = Depends(get_active_gmail_service),
 ):
-    """
-    Endpoint to receive Gmail push notifications from Pub/Sub.
-    These notifications are for the globally configured AGENT_USER_ID_FOR_SERVICE.
-    """
+    """Validate and commit one notification job before acknowledging Pub/Sub."""
+    if not settings.AUTOMATION_ENABLED or settings.AUTOMATION_OWNER_ID is None:
+        raise HTTPException(status_code=503, detail="Gmail automation is disabled")
     try:
-        payload = await request.json()
-        logger.info(f"Received /mail/notifications payload for processing.") # Avoid logging full payload by default if sensitive
-        
-        notification_data = extract_and_decode_message(payload)
-        
-        if notification_data:
-            logger.info(f"Valid notification data extracted. Adding to background tasks for email processing.")
-            # process_email_notification is async, suitable for background_tasks
-            background_tasks.add_task(
-                process_email_notification, 
-                notification_data, 
-                gmail_service # Pass the active service
-            )
-            return {"status": "processing_initiated", "detail": "Email notification processing started in background."}
-        
-        logger.info("No actionable data in notification payload after extraction.")
-        return {"status": "no_action_needed", "detail": "Notification received but no message data to process."}
-    
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in notification payload: {e}")
-        raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {e}")
-    except Exception as e:
-        logger.exception(f"Error processing /mail/notifications: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error processing notification.")
+        envelope = parse_notification_envelope(await _bounded_body(request), settings.PUBSUB_SUBSCRIPTION)
+        inserted = await enqueue_notification(envelope, settings.AUTOMATION_OWNER_ID)
+        logger.info("Persisted Gmail notification job inserted=%s", inserted)
+    except NotificationValidationError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Gmail notification") from exc
+    except AutomationBaselineUnavailable:
+        raise HTTPException(status_code=503, detail="Gmail notification baseline is not ready") from None
+    except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable, GoogleReconnectRequired):
+        # No durable enqueue occurred; Pub/Sub must retry this delivery.
+        raise HTTPException(status_code=503, detail="Gmail notification persistence is unavailable") from None
+    except Exception:
+        logger.exception("Unable to persist Gmail notification job")
+        # Non-2xx is intentional: acknowledge only after transaction commit.
+        raise HTTPException(status_code=503, detail="Gmail notification persistence is unavailable") from None
+
 
 @router.get("/agent/health", response_model=GlobalGmailHealthResponse)
 async def health_check(
     _operator: dict = Depends(require_global_gmail_operator),
 ):
-    """
-    Health check endpoint. Checks if the global Gmail service instance is initialized.
-    """
-    # Directly get the instance to report status without failing if it's None
-    gmail_service = get_gmail_service_instance() 
-    is_healthy = gmail_service is not None
-    
-    status_message = "Gmail service is connected and operational." if is_healthy \
-                     else "Gmail service is not initialized or unavailable. Check server startup logs."
-    
+    """Expose durable automation state without mailbox content."""
+    status = await automation_status(settings.AUTOMATION_OWNER_ID)
+    if status is None:
+        return {
+            "status": "unavailable",
+            "detail": "No durable Gmail mailbox state exists yet.",
+            "gmail_service_status": "unavailable",
+        }
+    healthy = not status["resync_required"] and status["failure_count"] == 0
     return {
-        "status": "healthy" if is_healthy else "unhealthy",
-        "detail": status_message,
-        "gmail_service_status": "connected" if is_healthy else "disconnected"
+        "status": "healthy" if healthy else "degraded",
+        "detail": "Durable Gmail automation status is available.",
+        "gmail_service_status": "ready" if healthy else "degraded",
     }
+
+
+@router.get("/agent/status")
+async def automation_status_endpoint(
+    _operator: dict = Depends(require_global_gmail_operator),
+):
+    """Return safe cursor/watch/queue observability for the configured operator."""
+    status = await automation_status(settings.AUTOMATION_OWNER_ID)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Gmail automation state not found")
+    return status
+
 
 @router.post("/renew-watch")
 async def renew_watch(
     _operator: dict = Depends(require_global_gmail_operator),
-    gmail_service = Depends(get_active_gmail_service),
 ):
-    """
-    Manually renew the Gmail watch for the globally configured AGENT_USER_ID_FOR_SERVICE.
-    """
-    try:
-        logger.info("Attempting to manually renew Gmail watch...")
-        watch_response = await setup_gmail_watch(gmail_service)
-        
-        if watch_response and watch_response.get('expiration'):
-            expiration_time = watch_response.get('expiration')
-            logger.info(f"Gmail watch renewed successfully. New expiration (epoch ms): {expiration_time}")
-            return {"status": "success", "message": "Gmail watch renewed successfully.", "expiration_epoch_ms": expiration_time}
-        else:
-            logger.error(f"Failed to renew watch. Response from setup_gmail_watch: {watch_response}")
-            raise HTTPException(status_code=500, detail="Failed to renew Gmail watch. Check server logs.")
-    except HttpError as e:
-        logger.exception(f"Google API HttpError renewing watch: {e.resp.status} - {e.content}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Google API error during watch renewal: {e.content.decode() if isinstance(e.content, bytes) else e.content}")
-    except Exception as e:
-        logger.exception(f"Unexpected error renewing Gmail watch: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while renewing watch: {str(e)}")
-    
+    """Attempt singleton-leased watch renewal; no mailbox-wide stop is issued."""
+    renewed = await renew_automation_watch(settings.AUTOMATION_OWNER_ID)
+    return {"status": "renewed" if renewed else "not_due_or_unavailable"}
+
+
 @router.post("/agent/check-inbox")
 async def check_inbox(
-    background_tasks: BackgroundTasks,
     _operator: dict = Depends(require_global_gmail_operator),
-    gmail_service = Depends(get_active_gmail_service),
 ):
-    """
-    Manually check for unread emails for AGENT_USER_ID_FOR_SERVICE and process them.
-    """
-    try:
-        logger.info("Manually checking inbox for unread emails...")
-        request = gmail_service.users().messages().list(
-            userId='me',
-            q='is:unread in:inbox -category:promotions -category:social -from:noreply',
-            maxResults=10,
-        )
-        results = await execute_google_request(request, gmail_service)
-        
-        messages = results.get('messages', [])
-        
-        if not messages:
-            logger.info("No unread emails found during manual check.")
-            return {"status": "success", "message": "No unread emails found matching criteria."}
-        
-        logger.info(f"Found {len(messages)} unread emails. Adding to background processing.")
-        processed_ids = []
-        for message_summary in messages:
-            message_id = message_summary['id']
-            processed_ids.append(message_id)
-            # fetch_and_process_email is async and is awaited by BackgroundTasks
-            background_tasks.add_task(
-                fetch_and_process_email,
-                gmail_service, # Pass the active service
-                message_id
-            )
-        
-        return {
-            "status": "processing_initiated", 
-            "message": f"Processing {len(messages)} unread emails in the background.",
-            "processed_message_ids_queued": processed_ids
-        }
-    
-    except HttpError as e:
-        logger.exception(f"Google API HttpError checking inbox: {e.resp.status} - {e.content}")
-        raise HTTPException(status_code=e.resp.status, detail=f"Google API error: {e.content.decode() if isinstance(e.content, bytes) else e.content}")
-    except Exception as e:
-        logger.exception(f"Error checking inbox: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while checking inbox: {str(e)}")
+    """Retire process-local manual processing in favor of durable history jobs."""
+    raise HTTPException(
+        status_code=409,
+        detail="Manual inbox processing is disabled; use durable Pub/Sub/history processing.",
+    )

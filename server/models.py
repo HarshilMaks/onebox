@@ -1,6 +1,8 @@
 from uuid import uuid4
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -100,3 +102,85 @@ class PendingActionAuditEvent(Base):
     reason = Column(String(128), nullable=True)
     evidence = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class GmailNotificationJob(Base):
+    """One deduplicated Pub/Sub delivery, durably enqueued before HTTP 2xx."""
+
+    __tablename__ = "gmail_notification_jobs"
+    __table_args__ = (
+        UniqueConstraint("pubsub_message_id", name="uq_gmail_notification_jobs_pubsub_message_id"),
+        Index("ix_gmail_notification_jobs_state_received", "state", "received_at"),
+        Index("ix_gmail_notification_jobs_mailbox_history", "mailbox_email", "history_id"),
+        CheckConstraint(
+            "state IN ('pending', 'processing', 'succeeded', 'dead_letter')",
+            name="ck_gmail_notification_jobs_state",
+        ),
+    )
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    pubsub_message_id = Column(String(255), nullable=False)
+    mailbox_email = Column(String(320), nullable=False)
+    history_id = Column(BigInteger, nullable=False)
+    state = Column(String(32), nullable=False, default="pending")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    lease_token = Column(String(128), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_code = Column(String(128), nullable=True)
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class GmailMailboxState(Base):
+    """Durable cursor and singleton watch-renewal lease for one automation mailbox."""
+
+    __tablename__ = "gmail_mailbox_states"
+    __table_args__ = (
+        CheckConstraint(
+            "watch_lease_expires_at IS NULL OR watch_lease_token IS NOT NULL",
+            name="ck_gmail_mailbox_states_watch_lease",
+        ),
+    )
+
+    mailbox_email = Column(String(320), primary_key=True)
+    user_id = Column(PG_UUID(as_uuid=True), nullable=False, unique=True)
+    history_cursor = Column(BigInteger, nullable=True)
+    watch_history_id = Column(BigInteger, nullable=True)
+    watch_expires_at = Column(DateTime(timezone=True), nullable=True)
+    watch_lease_token = Column(String(128), nullable=True)
+    watch_lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    resync_required = Column(Boolean, nullable=False, default=False)
+    resync_page_token = Column(String(512), nullable=True)
+    resync_message_count = Column(Integer, nullable=False, default=0)
+    last_error_code = Column(String(128), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class GmailTriageWork(Base):
+    """Message-level idempotency record and durable analysis-only triage result."""
+
+    __tablename__ = "gmail_triage_work"
+    __table_args__ = (
+        UniqueConstraint("mailbox_email", "message_id", name="uq_gmail_triage_work_mailbox_message"),
+        Index("ix_gmail_triage_work_state", "state"),
+        CheckConstraint(
+            "state IN ('processing', 'succeeded', 'noop', 'dead_letter')",
+            name="ck_gmail_triage_work_state",
+        ),
+    )
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    mailbox_email = Column(String(320), nullable=False)
+    message_id = Column(String(256), nullable=False)
+    source_history_id = Column(BigInteger, nullable=False)
+    state = Column(String(32), nullable=False, default="processing")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    lease_token = Column(String(128), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    triage_summary = Column(Text, nullable=True)
+    last_error_code = Column(String(128), nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -84,6 +84,22 @@ async def test_pending_action_reconciliation_migration_quarantines_legacy_proces
                     )
                 )
             ).scalars().all()
+            notification_tables = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT tablename FROM pg_tables
+                        WHERE schemaname = 'public'
+                          AND tablename IN (
+                            'gmail_notification_jobs',
+                            'gmail_mailbox_states',
+                            'gmail_triage_work'
+                          )
+                        ORDER BY tablename
+                        """
+                    )
+                )
+            ).scalars().all()
         await engine.dispose()
 
         assert row.command_key == "legacy:11111111-1111-1111-1111-111111111111"
@@ -93,6 +109,11 @@ async def test_pending_action_reconciliation_migration_quarantines_legacy_proces
             "ck_pending_actions_processing_attempt",
             "ck_pending_actions_status",
             "uq_pending_actions_user_command_key",
+        ]
+        assert notification_tables == [
+            "gmail_mailbox_states",
+            "gmail_notification_jobs",
+            "gmail_triage_work",
         ]
         command.downgrade(alembic_config, "8f8a10d8c4f1")
     finally:
