@@ -23,6 +23,8 @@ from server.services.credentials import (
 from server.services.mail import extract_email_content, should_process_email
 from server.services.notification_jobs import (
     ClaimedNotificationJob,
+    ClaimedMailboxResync,
+    claim_mailbox_resync,
     claim_notification_job,
     claim_triage_work,
     claim_watch_renewal,
@@ -31,11 +33,16 @@ from server.services.notification_jobs import (
     complete_job_and_advance_cursor,
     complete_watch_renewal,
     configured_automation_mailbox,
+    dead_letter_job,
     fail_job,
     fail_watch_renewal,
     finalize_triage_work,
     job_mailbox_state,
+    record_worker_heartbeat,
+    release_mailbox_resync,
     release_triage_work,
+    requeue_job,
+    require_manual_resync,
     triage_work_is_terminal,
 )
 
@@ -174,6 +181,9 @@ async def _triage_message(
             resource=service,
         )
         content = extract_email_content(message)
+        if "error" in content:
+            await finalize_triage_work(claim, state="dead_letter", error_code="message_payload_invalid")
+            return True
         if not should_process_email(content):
             await finalize_triage_work(claim, state="noop")
             return True
@@ -220,24 +230,29 @@ async def _bounded_resync(
     service: Any,
     owner_id: UUID,
     mailbox_email: str,
-    page_token: str | None,
     source_history_id: int,
-) -> bool:
-    """Perform one durable bounded recovery page after history retention expires."""
+    resync: ClaimedMailboxResync,
+) -> str:
+    """Perform one fenced recovery page; never advance after the global cap."""
+    remaining = settings.GMAIL_RESYNC_MAX_MESSAGES - resync.message_count
+    if remaining <= 0:
+        persisted = await require_manual_resync(resync, error_code="resync_total_limit_reached")
+        return "manual_required" if persisted else "lost_lease"
     kwargs: dict[str, Any] = {
         "userId": "me",
         "q": "in:inbox",
-        "maxResults": min(100, settings.GMAIL_RESYNC_MAX_MESSAGES),
+        "maxResults": min(100, remaining),
     }
-    if page_token:
-        kwargs["pageToken"] = page_token
+    if resync.page_token:
+        kwargs["pageToken"] = resync.page_token
     response = await execute_google_request(service.users().messages().list(**kwargs), resource=service) or {}
     message_ids = [
         item["id"]
         for item in response.get("messages", [])
         if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
     ]
-    for message_id in dict.fromkeys(message_ids):
+    message_ids = list(dict.fromkeys(message_ids))
+    for message_id in message_ids:
         if not await _triage_message(
             service=service,
             owner_id=owner_id,
@@ -245,22 +260,25 @@ async def _bounded_resync(
             message_id=message_id,
             source_history_id=source_history_id,
         ):
-            return False
+            return "retryable"
     next_page_token = response.get("nextPageToken")
     if isinstance(next_page_token, str) and next_page_token:
-        await checkpoint_bounded_resync(
-            mailbox_email,
-            owner_id,
+        if resync.message_count + len(message_ids) >= settings.GMAIL_RESYNC_MAX_MESSAGES:
+            persisted = await require_manual_resync(resync, error_code="resync_total_limit_reached")
+            return "manual_required" if persisted else "lost_lease"
+        persisted = await checkpoint_bounded_resync(
+            resync,
             next_page_token=next_page_token,
             processed_count=len(message_ids),
         )
-        return False
+        return "checkpointed" if persisted else "lost_lease"
 
     profile = await execute_google_request(service.users().getProfile(userId="me"), resource=service) or {}
     history_cursor = _history_id(profile.get("historyId"))
     if history_cursor is None:
-        return False
-    return await complete_bounded_resync(mailbox_email, owner_id, history_cursor)
+        return "retryable"
+    persisted = await complete_bounded_resync(resync, history_cursor)
+    return "completed" if persisted else "lost_lease"
 
 
 async def process_notification_job(claim: ClaimedNotificationJob) -> None:
@@ -269,30 +287,54 @@ async def process_notification_job(claim: ClaimedNotificationJob) -> None:
     if state is None:
         await fail_job(claim, error_code="mailbox_state_missing", dead_letter=True)
         return
-    if state.resync_required:
+    if state.resync_state != "idle" or state.resync_required:
+        if state.resync_state == "manual_required":
+            await dead_letter_job(claim, error_code="resync_manual_required")
+            return
+        resync_claim = await claim_mailbox_resync(claim, state.user_id)
+        if resync_claim is None:
+            # Another worker owns recovery or its persisted backoff is not due.
+            await requeue_job(claim, error_code="resync_waiting")
+            return
         try:
             service = await _gmail_service_for_owner(state.user_id)
-            resynced = await _bounded_resync(
+            outcome = await _bounded_resync(
                 service=service,
                 owner_id=state.user_id,
                 mailbox_email=claim.mailbox_email,
-                page_token=state.resync_page_token,
                 source_history_id=state.history_cursor or 1,
+                resync=resync_claim,
             )
         except (CredentialEncryptionUnavailable, GoogleCredentialsUnavailable, GoogleReconnectRequired):
-            await fail_job(claim, error_code="credentials_unavailable", require_resync=True)
+            await release_mailbox_resync(resync_claim, error_code="credentials_unavailable")
+            await requeue_job(claim, error_code="credentials_unavailable")
             return
         except GoogleProviderError:
-            await fail_job(claim, error_code="resync_unavailable", require_resync=True)
+            await release_mailbox_resync(resync_claim, error_code="resync_unavailable")
+            await requeue_job(claim, error_code="resync_unavailable")
             return
         except Exception:
             logger.exception("Bounded Gmail resync failed for %s", claim.mailbox_email)
-            await fail_job(claim, error_code="resync_internal", require_resync=True)
+            await release_mailbox_resync(resync_claim, error_code="resync_internal")
+            await requeue_job(claim, error_code="resync_internal")
             return
-        if not resynced:
-            await fail_job(claim, error_code="resync_incomplete", require_resync=True)
-            return
-        await complete_job_and_advance_cursor(claim, history_cursor=claim.history_id)
+        if outcome == "completed":
+            await complete_job_and_advance_cursor(claim, history_cursor=claim.history_id)
+        elif outcome == "checkpointed":
+            await requeue_job(
+                claim,
+                error_code="resync_checkpointed",
+                next_attempt_at=datetime.now(timezone.utc),
+            )
+        elif outcome == "manual_required":
+            await dead_letter_job(claim, error_code="resync_total_limit_reached")
+        elif outcome == "retryable":
+            await release_mailbox_resync(resync_claim, error_code="resync_incomplete")
+            await requeue_job(claim, error_code="resync_incomplete")
+        else:
+            # A newer worker owns or completed this generation. Never mutate
+            # mailbox recovery state from a stale lease.
+            await requeue_job(claim, error_code="resync_lease_lost")
         return
     if state.history_cursor is None:
         # The watch baseline must be persisted first. Do not use the notification
@@ -344,15 +386,32 @@ async def process_notification_job(claim: ClaimedNotificationJob) -> None:
 
 
 async def run_notification_worker(stop_event: asyncio.Event, owner_id: UUID) -> None:
-    """Poll/claim durable jobs until shutdown. Ordinary shutdown never stops watch."""
+    """Poll durable work until shutdown; transient failures never terminate the loop."""
+    error_delay = min(
+        settings.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS,
+        settings.GMAIL_NOTIFICATION_POLL_SECONDS,
+    )
     while not stop_event.is_set():
-        await renew_automation_watch(owner_id)
-        claim = await claim_notification_job()
-        if claim is not None:
+        try:
+            await record_worker_heartbeat(owner_id)
+            await renew_automation_watch(owner_id)
+            claim = await claim_notification_job()
+            if claim is not None:
+                try:
+                    await process_notification_job(claim)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Unexpected notification worker failure for job %s", claim.id)
+                continue
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Gmail notification worker iteration failed")
             try:
-                await process_notification_job(claim)
-            except Exception:
-                logger.exception("Unexpected notification worker failure for job %s", claim.id)
+                await asyncio.wait_for(stop_event.wait(), timeout=error_delay)
+            except TimeoutError:
+                pass
             continue
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=settings.GMAIL_NOTIFICATION_POLL_SECONDS)

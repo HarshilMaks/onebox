@@ -225,3 +225,12 @@ def test_api_lifespan_does_not_start_gmail_automation_worker(settings_class, mon
 
     asyncio.run(exercise_lifespan())
     create_task.assert_not_called()
+
+
+def test_retry_backoff_bounds_are_validated(settings_class):
+    with pytest.raises(ValidationError, match="GMAIL_RETRY_BACKOFF_INITIAL_SECONDS"):
+        build_settings(
+            settings_class,
+            GMAIL_RETRY_BACKOFF_INITIAL_SECONDS=10,
+            GMAIL_RETRY_BACKOFF_MAX_SECONDS=5,
+        )

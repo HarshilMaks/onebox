@@ -105,8 +105,11 @@ class Settings(BaseSettings):
     GMAIL_NOTIFICATION_POLL_SECONDS: float = Field(default=1.0, gt=0, le=60)
     GMAIL_NOTIFICATION_LEASE_SECONDS: int = Field(default=120, ge=10, le=3_600)
     GMAIL_NOTIFICATION_MAX_ATTEMPTS: int = Field(default=5, ge=1, le=100)
+    GMAIL_RETRY_BACKOFF_INITIAL_SECONDS: int = Field(default=5, ge=1, le=3_600)
+    GMAIL_RETRY_BACKOFF_MAX_SECONDS: int = Field(default=300, ge=1, le=86_400)
     GMAIL_RESYNC_MAX_MESSAGES: int = Field(default=100, ge=1, le=1_000)
     GMAIL_WATCH_RENEWAL_SECONDS: int = Field(default=86_400, ge=300, le=604_800)
+    GMAIL_WORKER_LIVENESS_SECONDS: int = Field(default=60, ge=10, le=3_600)
 
     # JWT contract. Priority 3 will enforce issuer and audience at verification.
     SECRET_KEY: str
@@ -290,6 +293,9 @@ class Settings(BaseSettings):
             raise ValueError(
                 "OAUTH_TOKEN_KEYRING_PATH and OAUTH_TOKEN_ACTIVE_KEY_ID must be configured together"
             )
+
+        if self.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS > self.GMAIL_RETRY_BACKOFF_MAX_SECONDS:
+            raise ValueError("GMAIL_RETRY_BACKOFF_INITIAL_SECONDS must not exceed GMAIL_RETRY_BACKOFF_MAX_SECONDS")
 
         if self.SERVICE_ROLE is ServiceRole.COMBINED and self.ENVIRONMENT not in {
             Environment.DEVELOPMENT,

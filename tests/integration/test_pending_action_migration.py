@@ -100,6 +100,27 @@ async def test_pending_action_reconciliation_migration_quarantines_legacy_proces
                     )
                 )
             ).scalars().all()
+            notification_columns = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT table_name || '.' || column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND (
+                            (table_name = 'gmail_notification_jobs' AND column_name = 'next_attempt_at')
+                            OR (table_name = 'gmail_triage_work' AND column_name = 'next_attempt_at')
+                            OR (table_name = 'gmail_mailbox_states' AND column_name IN (
+                                'resync_state', 'resync_generation', 'resync_lease_token',
+                                'resync_lease_expires_at', 'resync_attempt_count',
+                                'resync_next_attempt_at', 'worker_heartbeat_at', 'watch_last_error_code'
+                            ))
+                          )
+                        ORDER BY table_name, column_name
+                        """
+                    )
+                )
+            ).scalars().all()
         await engine.dispose()
 
         assert row.command_key == "legacy:11111111-1111-1111-1111-111111111111"
@@ -114,6 +135,18 @@ async def test_pending_action_reconciliation_migration_quarantines_legacy_proces
             "gmail_mailbox_states",
             "gmail_notification_jobs",
             "gmail_triage_work",
+        ]
+        assert notification_columns == [
+            "gmail_mailbox_states.resync_attempt_count",
+            "gmail_mailbox_states.resync_generation",
+            "gmail_mailbox_states.resync_lease_expires_at",
+            "gmail_mailbox_states.resync_lease_token",
+            "gmail_mailbox_states.resync_next_attempt_at",
+            "gmail_mailbox_states.resync_state",
+            "gmail_mailbox_states.watch_last_error_code",
+            "gmail_mailbox_states.worker_heartbeat_at",
+            "gmail_notification_jobs.next_attempt_at",
+            "gmail_triage_work.next_attempt_at",
         ]
         command.downgrade(alembic_config, "8f8a10d8c4f1")
     finally:

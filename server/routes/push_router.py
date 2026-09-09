@@ -1,5 +1,7 @@
 import logging
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from google.auth import exceptions as google_auth_exceptions
 from google.oauth2 import id_token
@@ -142,10 +144,36 @@ async def health_check(
             "detail": "No durable Gmail mailbox state exists yet.",
             "gmail_service_status": "unavailable",
         }
-    healthy = not status["resync_required"] and status["failure_count"] == 0
+    now = datetime.now(timezone.utc)
+    heartbeat = status["worker_heartbeat_at"]
+    heartbeat_fresh = bool(
+        heartbeat is not None
+        and (now - heartbeat).total_seconds() <= settings.GMAIL_WORKER_LIVENESS_SECONDS
+    )
+    healthy = (
+        status["watch_valid"]
+        and status["watch_last_error_code"] is None
+        and heartbeat_fresh
+        and status["resync_state"] == "idle"
+        and status["failure_count"] == 0
+    )
+    if healthy:
+        detail = "Durable Gmail automation watch and worker are healthy."
+    elif not status["watch_valid"]:
+        detail = "Gmail watch is missing or expired."
+    elif status["watch_last_error_code"] is not None:
+        detail = "Gmail watch renewal is failing."
+    elif not heartbeat_fresh:
+        detail = "Gmail automation worker heartbeat is stale."
+    elif status["resync_state"] == "manual_required":
+        detail = "Gmail recovery requires operator intervention."
+    elif status["resync_state"] != "idle":
+        detail = "Gmail recovery is in progress or deferred."
+    else:
+        detail = "Gmail notification queue has terminal failures."
     return {
         "status": "healthy" if healthy else "degraded",
-        "detail": "Durable Gmail automation status is available.",
+        "detail": detail,
         "gmail_service_status": "ready" if healthy else "degraded",
     }
 

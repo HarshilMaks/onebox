@@ -46,6 +46,7 @@ class ClaimedNotificationJob:
     mailbox_email: str
     history_id: int
     lease_token: str
+    resync_generation: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,8 +55,28 @@ class ClaimedTriageWork:
     lease_token: str
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimedMailboxResync:
+    mailbox_email: str
+    user_id: UUID
+    lease_token: str
+    generation: int
+    page_token: str | None
+    message_count: int
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _retry_at(attempt_count: int) -> datetime:
+    """Return a deterministic capped backoff persisted across worker restarts."""
+    exponent = max(0, min(attempt_count - 1, 30))
+    delay = min(
+        settings.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS * (2**exponent),
+        settings.GMAIL_RETRY_BACKOFF_MAX_SECONDS,
+    )
+    return _now() + timedelta(seconds=delay)
 
 
 def _normalize_email(value: object) -> str:
@@ -160,7 +181,7 @@ async def enqueue_notification(envelope: NotificationEnvelope, owner_id: UUID) -
 
 
 async def claim_notification_job() -> ClaimedNotificationJob | None:
-    """Claim one pending/stale job with a finite lease using SKIP LOCKED."""
+    """Claim one due job; expired leases transition through persisted backoff first."""
     now = _now()
     lease_duration = timedelta(seconds=settings.GMAIL_NOTIFICATION_LEASE_SECONDS)
     async with AsyncSessionLocal() as db:
@@ -168,7 +189,13 @@ async def claim_notification_job() -> ClaimedNotificationJob | None:
             await db.scalars(
                 select(GmailNotificationJob)
                 .where(
-                    (GmailNotificationJob.state == "pending")
+                    (
+                        (GmailNotificationJob.state == "pending")
+                        & (
+                            (GmailNotificationJob.next_attempt_at.is_(None))
+                            | (GmailNotificationJob.next_attempt_at <= now)
+                        )
+                    )
                     | (
                         (GmailNotificationJob.state == "processing")
                         & (GmailNotificationJob.lease_expires_at <= now)
@@ -187,41 +214,84 @@ async def claim_notification_job() -> ClaimedNotificationJob | None:
             .where(GmailMailboxState.mailbox_email == job.mailbox_email)
             .with_for_update()
         )
-        resync_active = bool(mailbox_state and mailbox_state.resync_required)
-        if job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS and not resync_active:
-            if mailbox_state is None:
-                job.state = "dead_letter"
-                job.last_error_code = "mailbox_state_missing"
-                job.processed_at = now
-            else:
-                # A worker can crash after consuming its final lease. Preserve a
-                # runnable recovery job instead of leaving the history cursor
-                # behind an abandoned dead letter.
+        if mailbox_state is None:
+            job.state = "dead_letter"
+            job.last_error_code = "mailbox_state_missing"
+            job.processed_at = now
+            await db.commit()
+            return None
+        if job.state == "processing":
+            job.state = "pending"
+            job.lease_token = None
+            job.lease_expires_at = None
+            job.last_error_code = "job_lease_expired"
+            job.next_attempt_at = _retry_at(max(1, job.attempt_count))
+            if (
+                mailbox_state.resync_state == "processing"
+                and mailbox_state.resync_lease_expires_at is not None
+                and mailbox_state.resync_lease_expires_at <= now
+            ):
+                mailbox_state.resync_state = "required"
                 mailbox_state.resync_required = True
-                mailbox_state.last_error_code = "attempt_limit_exceeded"
-                job.state = "pending"
-                job.last_error_code = "attempt_limit_exceeded"
-                job.lease_token = None
-                job.lease_expires_at = None
-                job.processed_at = None
+                mailbox_state.resync_lease_token = None
+                mailbox_state.resync_lease_expires_at = None
+                mailbox_state.resync_attempt_count += 1
+                mailbox_state.resync_next_attempt_at = _retry_at(mailbox_state.resync_attempt_count)
+                mailbox_state.last_error_code = "resync_lease_expired"
+            await db.commit()
+            return None
+        if mailbox_state.resync_state == "manual_required":
+            job.state = "dead_letter"
+            job.last_error_code = "resync_manual_required"
+            job.next_attempt_at = None
+            job.processed_at = now
+            await db.commit()
+            return None
+        if job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS and mailbox_state.resync_state == "idle":
+            mailbox_state.resync_state = "required"
+            mailbox_state.resync_required = True
+            mailbox_state.resync_generation += 1
+            mailbox_state.resync_page_token = None
+            mailbox_state.resync_message_count = 0
+            mailbox_state.resync_attempt_count = 0
+            mailbox_state.resync_next_attempt_at = now
+            mailbox_state.last_error_code = "attempt_limit_exceeded"
+            job.last_error_code = "attempt_limit_exceeded"
+            job.next_attempt_at = now
             await db.commit()
             return None
         job.state = "processing"
         job.attempt_count += 1
         job.lease_token = secrets.token_urlsafe(32)
         job.lease_expires_at = now + lease_duration
+        job.next_attempt_at = None
         await db.commit()
         return ClaimedNotificationJob(
             id=job.id,
             mailbox_email=job.mailbox_email,
             history_id=job.history_id,
             lease_token=job.lease_token,
+            resync_generation=mailbox_state.resync_generation,
         )
 
 
 async def job_mailbox_state(job: ClaimedNotificationJob) -> GmailMailboxState | None:
     async with AsyncSessionLocal() as db:
         return await db.get(GmailMailboxState, job.mailbox_email)
+
+
+async def record_worker_heartbeat(owner_id: UUID) -> None:
+    """Persist an observable heartbeat; a database outage intentionally leaves it stale."""
+    async with AsyncSessionLocal() as db:
+        state = await db.scalar(
+            select(GmailMailboxState)
+            .where(GmailMailboxState.user_id == owner_id)
+            .with_for_update()
+        )
+        if state is None:
+            return
+        state.worker_heartbeat_at = _now()
+        await db.commit()
 
 
 async def claim_triage_work(
@@ -272,9 +342,12 @@ async def claim_triage_work(
             return None
         if row.lease_expires_at is not None and row.lease_expires_at > now:
             return None
+        if row.next_attempt_at is not None and row.next_attempt_at > now:
+            return None
         row.attempt_count += 1
         row.lease_token = secrets.token_urlsafe(32)
         row.lease_expires_at = now + lease_duration
+        row.next_attempt_at = None
         await db.commit()
         return ClaimedTriageWork(id=row.id, lease_token=row.lease_token)
 
@@ -303,6 +376,7 @@ async def finalize_triage_work(
         row.state = state
         row.triage_summary = summary[:4_000] if summary else None
         row.last_error_code = error_code
+        row.next_attempt_at = None
         row.processed_at = _now()
         await db.commit()
 
@@ -322,8 +396,78 @@ async def complete_job_and_advance_cursor(
     claim: ClaimedNotificationJob,
     *,
     history_cursor: int,
+) -> bool:
+    """Advance a cursor only if the claimed mailbox recovery generation is still idle."""
+    async with AsyncSessionLocal() as db:
+        job = await db.scalar(
+            select(GmailNotificationJob)
+            .where(
+                GmailNotificationJob.id == claim.id,
+                GmailNotificationJob.state == "processing",
+                GmailNotificationJob.lease_token == claim.lease_token,
+            )
+            .with_for_update()
+        )
+        if job is None:
+            return False
+        state = await db.scalar(
+            select(GmailMailboxState)
+            .where(GmailMailboxState.mailbox_email == claim.mailbox_email)
+            .with_for_update()
+        )
+        if state is None:
+            job.state = "dead_letter"
+            job.last_error_code = "mailbox_state_missing"
+            job.next_attempt_at = None
+            job.processed_at = _now()
+            await db.commit()
+            return False
+        if state.resync_state != "idle" or state.resync_generation != claim.resync_generation:
+            # Recovery changed after this worker leased normal history. Re-read
+            # the durable cursor on a later job lease instead of advancing it.
+            job.state = "pending"
+            job.lease_token = None
+            job.lease_expires_at = None
+            job.last_error_code = "mailbox_recovery_changed"
+            job.next_attempt_at = _retry_at(max(1, job.attempt_count))
+            job.processed_at = None
+            await db.commit()
+            return False
+        state.history_cursor = max(state.history_cursor or 0, history_cursor)
+        state.last_error_code = None
+        job.state = "succeeded"
+        job.last_error_code = None
+        job.processed_at = _now()
+        job.next_attempt_at = None
+        await db.commit()
+        return True
+
+
+async def _start_resync_locked(state: GmailMailboxState, *, error_code: str, now: datetime) -> None:
+    """Start one new mailbox recovery generation while holding its row lock."""
+    if state.resync_state == "idle":
+        state.resync_generation += 1
+        state.resync_page_token = None
+        state.resync_message_count = 0
+        state.resync_attempt_count = 0
+    if state.resync_state != "manual_required":
+        state.resync_state = "required"
+        state.resync_required = True
+        state.resync_lease_token = None
+        state.resync_lease_expires_at = None
+        state.resync_next_attempt_at = now
+        state.last_error_code = error_code
+
+
+async def fail_job(
+    claim: ClaimedNotificationJob,
+    *,
+    error_code: str,
+    dead_letter: bool = False,
+    require_resync: bool = False,
 ) -> None:
-    """Advance the mailbox cursor only after all history work is durably terminal."""
+    """Persist a delayed retry or fence recovery before a cursor can be advanced."""
+    now = _now()
     async with AsyncSessionLocal() as db:
         job = await db.scalar(
             select(GmailNotificationJob)
@@ -344,23 +488,52 @@ async def complete_job_and_advance_cursor(
         if state is None:
             job.state = "dead_letter"
             job.last_error_code = "mailbox_state_missing"
+            job.next_attempt_at = None
+            job.processed_at = now
+            await db.commit()
+            return
+        recovery_changed = (
+            state.resync_generation != claim.resync_generation
+            or state.resync_state != "idle"
+        )
+        if recovery_changed:
+            job.state = "pending"
+            job.lease_token = None
+            job.lease_expires_at = None
+            job.next_attempt_at = _retry_at(max(1, job.attempt_count))
+            job.last_error_code = "mailbox_recovery_changed"
+            job.processed_at = None
+            await db.commit()
+            return
+        needs_resync = require_resync or dead_letter or job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
+        if needs_resync:
+            await _start_resync_locked(state, error_code=error_code, now=now)
+            if state.resync_state == "manual_required":
+                job.state = "dead_letter"
+                job.next_attempt_at = None
+                job.processed_at = now
+            else:
+                job.state = "pending"
+                job.lease_token = None
+                job.lease_expires_at = None
+                job.next_attempt_at = now
+                job.processed_at = None
         else:
-            state.history_cursor = max(state.history_cursor or 0, history_cursor)
-            state.last_error_code = None
-            job.state = "succeeded"
-            job.last_error_code = None
-        job.processed_at = _now()
+            job.state = "pending"
+            job.lease_token = None
+            job.lease_expires_at = None
+            job.next_attempt_at = _retry_at(max(1, job.attempt_count))
+        job.last_error_code = error_code
         await db.commit()
 
 
-async def fail_job(
+async def requeue_job(
     claim: ClaimedNotificationJob,
     *,
     error_code: str,
-    dead_letter: bool = False,
-    require_resync: bool = False,
+    next_attempt_at: datetime | None = None,
 ) -> None:
-    """Persist a safe worker outcome; never advance a cursor after failure."""
+    """Release a job without changing mailbox recovery state."""
     async with AsyncSessionLocal() as db:
         job = await db.scalar(
             select(GmailNotificationJob)
@@ -373,45 +546,176 @@ async def fail_job(
         )
         if job is None:
             return
-        if require_resync:
-            state = await db.scalar(
-                select(GmailMailboxState)
-                .where(GmailMailboxState.mailbox_email == claim.mailbox_email)
-                .with_for_update()
-            )
-            if state is not None:
-                state.resync_required = True
-                state.last_error_code = error_code
+        job.state = "pending"
+        job.lease_token = None
+        job.lease_expires_at = None
+        job.next_attempt_at = next_attempt_at or _retry_at(max(1, job.attempt_count))
         job.last_error_code = error_code
-        requires_recovery = (
-            require_resync
-            or dead_letter
-            or job.attempt_count >= settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
-        )
-        if requires_recovery:
-            state = await db.scalar(
-                select(GmailMailboxState)
-                .where(GmailMailboxState.mailbox_email == claim.mailbox_email)
-                .with_for_update()
-            )
-            if state is not None:
-                # A cursor cannot advance after an incomplete history range. Reuse
-                # this durable job as the resync trigger so later deliveries cannot
-                # remain permanently blocked behind a dead-lettered range.
-                state.resync_required = True
-                state.last_error_code = error_code
-                job.state = "pending"
-                job.lease_token = None
-                job.lease_expires_at = None
-                job.processed_at = None
-            else:
-                job.state = "dead_letter"
-                job.processed_at = _now()
-        else:
-            job.state = "pending"
-            job.lease_token = None
-            job.lease_expires_at = None
         await db.commit()
+
+
+async def dead_letter_job(claim: ClaimedNotificationJob, *, error_code: str) -> None:
+    """Record a terminal mailbox intervention without moving its cursor."""
+    async with AsyncSessionLocal() as db:
+        job = await db.scalar(
+            select(GmailNotificationJob)
+            .where(
+                GmailNotificationJob.id == claim.id,
+                GmailNotificationJob.state == "processing",
+                GmailNotificationJob.lease_token == claim.lease_token,
+            )
+            .with_for_update()
+        )
+        if job is None:
+            return
+        job.state = "dead_letter"
+        job.lease_token = None
+        job.lease_expires_at = None
+        job.next_attempt_at = None
+        job.last_error_code = error_code
+        job.processed_at = _now()
+        await db.commit()
+
+
+async def claim_mailbox_resync(
+    claim: ClaimedNotificationJob,
+    owner_id: UUID,
+) -> ClaimedMailboxResync | None:
+    """Take the single fenced recovery lease for a mailbox if one is due."""
+    now = _now()
+    async with AsyncSessionLocal() as db:
+        state = await db.scalar(
+            select(GmailMailboxState)
+            .where(
+                GmailMailboxState.mailbox_email == claim.mailbox_email,
+                GmailMailboxState.user_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if state is None or state.resync_state in {"idle", "manual_required"}:
+            return None
+        if state.resync_state == "processing":
+            if state.resync_lease_expires_at is not None and state.resync_lease_expires_at <= now:
+                state.resync_state = "required"
+                state.resync_required = True
+                state.resync_lease_token = None
+                state.resync_lease_expires_at = None
+                state.resync_attempt_count += 1
+                state.resync_next_attempt_at = _retry_at(state.resync_attempt_count)
+                state.last_error_code = "resync_lease_expired"
+                await db.commit()
+            return None
+        if state.resync_next_attempt_at is not None and state.resync_next_attempt_at > now:
+            return None
+        token = secrets.token_urlsafe(32)
+        state.resync_state = "processing"
+        state.resync_required = True
+        state.resync_lease_token = token
+        state.resync_lease_expires_at = now + timedelta(seconds=settings.GMAIL_NOTIFICATION_LEASE_SECONDS)
+        state.resync_next_attempt_at = None
+        await db.commit()
+        return ClaimedMailboxResync(
+            mailbox_email=state.mailbox_email,
+            user_id=state.user_id,
+            lease_token=token,
+            generation=state.resync_generation,
+            page_token=state.resync_page_token,
+            message_count=state.resync_message_count,
+        )
+
+
+async def _locked_resync_state(
+    db: Any,
+    claim: ClaimedMailboxResync,
+) -> GmailMailboxState | None:
+    state = await db.scalar(
+        select(GmailMailboxState)
+        .where(
+            GmailMailboxState.mailbox_email == claim.mailbox_email,
+            GmailMailboxState.user_id == claim.user_id,
+            GmailMailboxState.resync_state == "processing",
+            GmailMailboxState.resync_generation == claim.generation,
+            GmailMailboxState.resync_lease_token == claim.lease_token,
+        )
+        .with_for_update()
+    )
+    return state
+
+
+async def checkpoint_bounded_resync(
+    claim: ClaimedMailboxResync,
+    *,
+    next_page_token: str,
+    processed_count: int,
+) -> bool:
+    """Persist one successful page only while this worker still owns recovery."""
+    async with AsyncSessionLocal() as db:
+        state = await _locked_resync_state(db, claim)
+        if state is None:
+            return False
+        state.resync_state = "required"
+        state.resync_required = True
+        state.resync_lease_token = None
+        state.resync_lease_expires_at = None
+        state.resync_page_token = next_page_token
+        state.resync_message_count += processed_count
+        state.resync_next_attempt_at = _now()
+        state.last_error_code = None
+        await db.commit()
+        return True
+
+
+async def complete_bounded_resync(claim: ClaimedMailboxResync, history_cursor: int) -> bool:
+    """Fence final cursor advancement to the owner of the current recovery generation."""
+    async with AsyncSessionLocal() as db:
+        state = await _locked_resync_state(db, claim)
+        if state is None:
+            return False
+        state.history_cursor = history_cursor
+        state.resync_state = "idle"
+        state.resync_required = False
+        state.resync_lease_token = None
+        state.resync_lease_expires_at = None
+        state.resync_page_token = None
+        state.resync_message_count = 0
+        state.resync_attempt_count = 0
+        state.resync_next_attempt_at = None
+        state.last_error_code = None
+        await db.commit()
+        return True
+
+
+async def release_mailbox_resync(claim: ClaimedMailboxResync, *, error_code: str) -> bool:
+    """Release a retryable recovery lease with durable exponential backoff."""
+    async with AsyncSessionLocal() as db:
+        state = await _locked_resync_state(db, claim)
+        if state is None:
+            return False
+        state.resync_state = "required"
+        state.resync_required = True
+        state.resync_lease_token = None
+        state.resync_lease_expires_at = None
+        state.resync_attempt_count += 1
+        state.resync_next_attempt_at = _retry_at(state.resync_attempt_count)
+        state.last_error_code = error_code
+        await db.commit()
+        return True
+
+
+async def require_manual_resync(claim: ClaimedMailboxResync, *, error_code: str) -> bool:
+    """Stop bounded recovery without advancing the cursor once the global cap is reached."""
+    async with AsyncSessionLocal() as db:
+        state = await _locked_resync_state(db, claim)
+        if state is None:
+            return False
+        state.resync_state = "manual_required"
+        state.resync_required = True
+        state.resync_lease_token = None
+        state.resync_lease_expires_at = None
+        state.resync_next_attempt_at = None
+        state.last_error_code = error_code
+        await db.commit()
+        return True
 
 
 async def claim_watch_renewal(mailbox_email: str, owner_id: UUID) -> str | None:
@@ -462,6 +766,7 @@ async def complete_watch_renewal(
         state.watch_expires_at = expires_at
         state.watch_lease_token = None
         state.watch_lease_expires_at = None
+        state.watch_last_error_code = None
         state.last_error_code = None
         await db.commit()
         return True
@@ -479,6 +784,7 @@ async def fail_watch_renewal(mailbox_email: str, lease_token: str, error_code: s
         )
         if state is None:
             return
+        state.watch_last_error_code = error_code
         state.last_error_code = error_code
         state.watch_lease_token = None
         state.watch_lease_expires_at = None
@@ -506,39 +812,29 @@ async def automation_status(owner_id: UUID) -> dict[str, Any] | None:
                 GmailNotificationJob.state == "dead_letter",
             )
         )
+        now = _now()
+        watch_valid = bool(
+            state.watch_history_id is not None
+            and state.watch_expires_at is not None
+            and state.watch_expires_at > now
+        )
         return {
             "mailbox": state.mailbox_email,
             "history_cursor": state.history_cursor,
             "watch_expires_at": state.watch_expires_at,
+            "watch_valid": watch_valid,
             "resync_required": state.resync_required,
+            "resync_state": state.resync_state,
+            "resync_generation": state.resync_generation,
             "resync_message_count": state.resync_message_count,
+            "resync_next_attempt_at": state.resync_next_attempt_at,
             "last_error_code": state.last_error_code,
+            "watch_last_error_code": state.watch_last_error_code,
             "watch_lease_expires_at": state.watch_lease_expires_at,
+            "worker_heartbeat_at": state.worker_heartbeat_at,
             "queue_depth": queue_depth or 0,
             "failure_count": failure_count or 0,
         }
-
-
-async def complete_bounded_resync(mailbox_email: str, owner_id: UUID, history_cursor: int) -> bool:
-    async with AsyncSessionLocal() as db:
-        state = await db.scalar(
-            select(GmailMailboxState)
-            .where(
-                GmailMailboxState.mailbox_email == mailbox_email,
-                GmailMailboxState.user_id == owner_id,
-                GmailMailboxState.resync_required.is_(True),
-            )
-            .with_for_update()
-        )
-        if state is None:
-            return False
-        state.history_cursor = history_cursor
-        state.resync_required = False
-        state.resync_page_token = None
-        state.resync_message_count = 0
-        state.last_error_code = None
-        await db.commit()
-        return True
 
 
 async def release_triage_work(claim: ClaimedTriageWork, *, error_code: str) -> None:
@@ -557,31 +853,6 @@ async def release_triage_work(claim: ClaimedTriageWork, *, error_code: str) -> N
             return
         row.lease_token = None
         row.lease_expires_at = None
+        row.next_attempt_at = _retry_at(max(1, row.attempt_count))
         row.last_error_code = error_code
         await db.commit()
-
-
-async def checkpoint_bounded_resync(
-    mailbox_email: str,
-    owner_id: UUID,
-    *,
-    next_page_token: str | None,
-    processed_count: int,
-) -> bool:
-    async with AsyncSessionLocal() as db:
-        state = await db.scalar(
-            select(GmailMailboxState)
-            .where(
-                GmailMailboxState.mailbox_email == mailbox_email,
-                GmailMailboxState.user_id == owner_id,
-                GmailMailboxState.resync_required.is_(True),
-            )
-            .with_for_update()
-        )
-        if state is None:
-            return False
-        state.resync_page_token = next_page_token
-        state.resync_message_count += processed_count
-        state.last_error_code = "history_cursor_expired"
-        await db.commit()
-        return True

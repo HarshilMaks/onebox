@@ -126,6 +126,7 @@ class GmailNotificationJob(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     lease_token = Column(String(128), nullable=True)
     lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
     last_error_code = Column(String(128), nullable=True)
     received_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     processed_at = Column(DateTime(timezone=True), nullable=True)
@@ -142,6 +143,19 @@ class GmailMailboxState(Base):
             "watch_lease_expires_at IS NULL OR watch_lease_token IS NOT NULL",
             name="ck_gmail_mailbox_states_watch_lease",
         ),
+        CheckConstraint(
+            "resync_state IN ('idle', 'required', 'processing', 'manual_required')",
+            name="ck_gmail_mailbox_states_resync_state",
+        ),
+        CheckConstraint(
+            "(resync_state = 'processing') = "
+            "(resync_lease_token IS NOT NULL AND resync_lease_expires_at IS NOT NULL)",
+            name="ck_gmail_mailbox_states_resync_lease",
+        ),
+        CheckConstraint(
+            "resync_generation >= 0 AND resync_attempt_count >= 0 AND resync_message_count >= 0",
+            name="ck_gmail_mailbox_states_resync_counts",
+        ),
     )
 
     mailbox_email = Column(String(320), primary_key=True)
@@ -152,8 +166,16 @@ class GmailMailboxState(Base):
     watch_lease_token = Column(String(128), nullable=True)
     watch_lease_expires_at = Column(DateTime(timezone=True), nullable=True)
     resync_required = Column(Boolean, nullable=False, default=False)
+    resync_state = Column(String(32), nullable=False, default="idle")
+    resync_generation = Column(BigInteger, nullable=False, default=0)
+    resync_lease_token = Column(String(128), nullable=True)
+    resync_lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    resync_attempt_count = Column(Integer, nullable=False, default=0)
+    resync_next_attempt_at = Column(DateTime(timezone=True), nullable=True)
     resync_page_token = Column(String(512), nullable=True)
     resync_message_count = Column(Integer, nullable=False, default=0)
+    worker_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    watch_last_error_code = Column(String(128), nullable=True)
     last_error_code = Column(String(128), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -179,6 +201,7 @@ class GmailTriageWork(Base):
     attempt_count = Column(Integer, nullable=False, default=0)
     lease_token = Column(String(128), nullable=True)
     lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
     triage_summary = Column(Text, nullable=True)
     last_error_code = Column(String(128), nullable=True)
     processed_at = Column(DateTime(timezone=True), nullable=True)

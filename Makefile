@@ -3,7 +3,7 @@ VENV ?= .venv
 PIP := $(VENV)/bin/pip
 PYTHON_BIN := $(VENV)/bin/python
 
-.PHONY: clean distclean install lint test check run run-dev compose-up compose-down migrate image-smoke
+.PHONY: clean distclean install lint test check run run-dev run-worker compose-up compose-down compose-config migrate image-smoke
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache .tox .nox .coverage htmlcov coverage.xml build dist
@@ -33,14 +33,20 @@ run:
 run-dev:
 	$(PYTHON_BIN) -m uvicorn server.main:app --reload --log-config server/logging.ini --host 0.0.0.0 --port 8000
 
+run-worker:
+	SERVICE_ROLE=automation_worker AUTOMATION_ENABLED=true $(PYTHON_BIN) -m server.workers
+
 compose-up:
 	docker compose up --build --detach
 
 compose-down:
 	docker compose down --remove-orphans
 
+compose-config:
+	docker compose config --quiet
+
 migrate:
-	docker compose --profile migrate run --rm migrate
+	docker compose run --rm migrate
 
 image-smoke:
 	docker build --no-cache -t onebox:test .

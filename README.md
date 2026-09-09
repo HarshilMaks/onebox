@@ -268,21 +268,42 @@ Authorization: Bearer <JWT_TOKEN>
 
 ## Docker Deployment
 
-To build and run both the FastAPI service and Redis container using Docker Compose:
+The supplied Compose topology starts three application roles in order: a one-shot
+migration service, the FastAPI API service, and a dedicated durable Gmail worker.
+The API owns authenticated Pub/Sub ingress; the worker runs
+`python -m server.workers`, renews the Gmail watch, and claims PostgreSQL jobs.
+
+Set the normal application settings plus these Compose-only mount paths before
+starting it. The credential files remain on the host and are mounted read-only;
+they are not baked into the image:
 
 ```bash
-docker compose up --build -d
+export GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH="$PWD/onebox_oauth.json"
+export GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH="$PWD/executive-agent.json"
+export AUTOMATION_OWNER_ID='00000000-0000-0000-0000-000000000000'
+export PUBSUB_TOPIC='projects/PROJECT/topics/gmail-notifications'
+export PUBSUB_SUBSCRIPTION='projects/PROJECT/subscriptions/gmail-notifications'
+export PUBSUB_PUSH_AUDIENCE='https://api.example.com/mail/notifications'
+export PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL='push@PROJECT.iam.gserviceaccount.com'
+make compose-config
+make compose-up
 ```
 
-To view application logs:
+`make compose-up` waits for PostgreSQL, applies Alembic migrations, then starts
+both the API and worker. The unauthenticated `/` route is process liveness only.
+The authenticated `/mail/agent/health` route reports Gmail readiness only when a
+valid unexpired watch and a fresh worker heartbeat exist. `/mail/agent/status`
+contains safe queue and recovery diagnostics.
+
+If bounded history recovery reaches `GMAIL_RESYNC_MAX_MESSAGES`, automation
+enters `manual_required` and deliberately does not advance its Gmail cursor. This
+prevents silently skipping mail; investigate the safe status endpoint and recover
+under an explicit operator procedure before resuming automation.
+
+To view application logs or stop the stack:
 
 ```bash
-docker compose logs -f app
-```
-
-To stop the containers:
-
-```bash
+docker compose logs -f app worker
 docker compose down
 ```
 

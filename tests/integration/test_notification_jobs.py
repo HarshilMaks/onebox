@@ -195,6 +195,7 @@ async def test_resync_and_retryable_triage_work_are_reclaimable(notification_db,
     async with notification_db() as session:
         job = await session.get(GmailNotificationJob, claim.id)
         job.attempt_count = notification_jobs.settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
+        job.next_attempt_at = notification_jobs._now()
         await session.commit()
     beyond_cap = await claim_notification_job()
     assert beyond_cap is not None
@@ -211,6 +212,20 @@ async def test_resync_and_retryable_triage_work_are_reclaimable(notification_db,
     )
     assert triage is not None
     await release_triage_work(triage, error_code="triage_provider_unavailable")
+    assert (
+        await claim_triage_work(
+            mailbox_email="owner@example.com",
+            message_id="gmail-message-1",
+            source_history_id=101,
+        )
+        is None
+    )
+    async with notification_db() as session:
+        work = await session.get(notification_jobs.GmailTriageWork, triage.id)
+        assert work is not None
+        assert work.next_attempt_at is not None
+        work.next_attempt_at = notification_jobs._now()
+        await session.commit()
     retried = await claim_triage_work(
         mailbox_email="owner@example.com",
         message_id="gmail-message-1",
@@ -325,6 +340,7 @@ async def test_watch_renewal_failure_releases_claimed_lease(
         assert state.watch_lease_token is None
         assert state.watch_lease_expires_at is None
         assert state.last_error_code == expected_error
+        assert state.watch_last_error_code == expected_error
 
 
 @pytest.mark.asyncio
@@ -384,19 +400,276 @@ async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_
         job.lease_expires_at = notification_jobs._now()
         await session.commit()
 
-    # A crashed worker never calls fail_job. Claim-time recovery must still
-    # preserve a runnable resync continuation after its final lease expires.
+    # A crashed worker first receives persisted retry backoff rather than an
+    # immediate reclaim; once its due retry reaches the cap it starts resync.
     assert await claim_notification_job() is None
     async with notification_db() as session:
         job = await session.get(GmailNotificationJob, claim.id)
         state = await session.get(GmailMailboxState, "owner@example.com")
         assert job is not None
         assert job.state == "pending"
+        assert job.last_error_code == "job_lease_expired"
+        assert job.next_attempt_at is not None
+        assert state is not None
+        assert state.resync_state == "idle"
+        job.next_attempt_at = notification_jobs._now()
+        await session.commit()
+
+    assert await claim_notification_job() is None
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert job is not None
         assert job.last_error_code == "attempt_limit_exceeded"
         assert state is not None
         assert state.resync_required is True
-        assert state.last_error_code == "attempt_limit_exceeded"
+        assert state.resync_state == "required"
 
     recovery_claim = await claim_notification_job()
     assert recovery_claim is not None
     assert recovery_claim.id == claim.id
+
+
+@pytest.mark.asyncio
+async def test_retryable_notification_failure_is_not_reclaimed_until_due(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, owner_id)
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-backoff"), "projects/test/subscriptions/onebox"),
+        owner_id,
+    )
+    claim = await claim_notification_job()
+    assert claim is not None
+    await fail_job(claim, error_code="history_unavailable")
+
+    async with notification_db() as session:
+        job = await session.get(GmailNotificationJob, claim.id)
+        assert job is not None
+        assert job.state == "pending"
+        assert job.next_attempt_at is not None
+        assert job.next_attempt_at > notification_jobs._now()
+        job.next_attempt_at = notification_jobs._now()
+        await session.commit()
+
+    retry = await claim_notification_job()
+    assert retry is not None
+    assert retry.id == claim.id
+    assert retry.lease_token != claim.lease_token
+
+
+@pytest.mark.asyncio
+async def test_stale_resync_transition_cannot_restore_completed_generation(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, owner_id)
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-fenced-resync"), "projects/test/subscriptions/onebox"),
+        owner_id,
+    )
+    job = await claim_notification_job()
+    assert job is not None
+    await fail_job(job, error_code="history_cursor_expired", require_resync=True)
+    trigger = await claim_notification_job()
+    assert trigger is not None
+    resync = await notification_jobs.claim_mailbox_resync(trigger, owner_id)
+    assert resync is not None
+
+    assert await notification_jobs.complete_bounded_resync(resync, 150) is True
+    assert await notification_jobs.checkpoint_bounded_resync(
+        resync,
+        next_page_token="stale-page",
+        processed_count=1,
+    ) is False
+    assert await notification_jobs.release_mailbox_resync(resync, error_code="stale") is False
+
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.resync_state == "idle"
+        assert state.resync_required is False
+        assert state.history_cursor == 150
+        assert state.resync_page_token is None
+
+
+@pytest.mark.asyncio
+async def test_resync_total_limit_requires_manual_recovery_without_cursor_advance(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    class Messages:
+        def list(self, **kwargs):
+            observed["max_results"] = kwargs["maxResults"]
+            return object()
+
+    class Users:
+        def messages(self):
+            return Messages()
+
+    class Service:
+        def users(self):
+            return Users()
+
+    observed = {}
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    monkeypatch.setattr(notification_jobs.settings, "GMAIL_RESYNC_MAX_MESSAGES", 2)
+    monkeypatch.setattr(mail_notifications.settings, "GMAIL_RESYNC_MAX_MESSAGES", 2)
+    await seed_mailbox_state(notification_db, owner_id)
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-resync-limit"), "projects/test/subscriptions/onebox"),
+        owner_id,
+    )
+    job = await claim_notification_job()
+    assert job is not None
+    await fail_job(job, error_code="history_cursor_expired", require_resync=True)
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        state.resync_message_count = 1
+        await session.commit()
+    trigger = await claim_notification_job()
+    assert trigger is not None
+    resync = await notification_jobs.claim_mailbox_resync(trigger, owner_id)
+    assert resync is not None
+
+    async def execute(_request, **_kwargs):
+        return {"messages": [{"id": "m-1"}], "nextPageToken": "more"}
+
+    async def terminal_triage(**_kwargs):
+        return True
+
+    monkeypatch.setattr(mail_notifications, "execute_google_request", execute)
+    monkeypatch.setattr(mail_notifications, "_triage_message", terminal_triage)
+    outcome = await mail_notifications._bounded_resync(
+        service=Service(),
+        owner_id=owner_id,
+        mailbox_email="owner@example.com",
+        source_history_id=100,
+        resync=resync,
+    )
+    assert outcome == "manual_required"
+    assert observed["max_results"] == 1
+
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.resync_state == "manual_required"
+        assert state.history_cursor == 100
+        assert state.last_error_code == "resync_total_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_malformed_gmail_payload_is_terminal_without_llm(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+    await seed_mailbox_state(notification_db, owner_id)
+
+    class Messages:
+        def get(self, **_kwargs):
+            return object()
+
+    class Users:
+        def messages(self):
+            return Messages()
+
+    class Service:
+        def users(self):
+            return Users()
+
+    async def malformed_message(_request, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(mail_notifications, "execute_google_request", malformed_message)
+    completed = await mail_notifications._triage_message(
+        service=Service(),
+        owner_id=owner_id,
+        mailbox_email="owner@example.com",
+        message_id="malformed-message",
+        source_history_id=101,
+    )
+    assert completed is True
+
+    async with notification_db() as session:
+        work = await session.scalar(
+            select(notification_jobs.GmailTriageWork).where(
+                notification_jobs.GmailTriageWork.message_id == "malformed-message"
+            )
+        )
+        assert work is not None
+        assert work.state == "dead_letter"
+        assert work.triage_summary is None
+        assert work.last_error_code == "message_payload_invalid"
+
+
+@pytest.mark.asyncio
+async def test_stale_normal_history_work_is_fenced_by_resync_generation(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, owner_id)
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-stale-normal-failure"), "projects/test/subscriptions/onebox"),
+        owner_id,
+    )
+    stale_failure = await claim_notification_job()
+    assert stale_failure is not None
+    assert stale_failure.resync_generation == 0
+
+    # A newer recovery generation has already completed while this history
+    # worker was still using its old cursor snapshot.
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        state.resync_generation = 1
+        state.resync_state = "idle"
+        state.resync_required = False
+        state.history_cursor = 150
+        await session.commit()
+
+    await fail_job(stale_failure, error_code="history_cursor_expired", require_resync=True)
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        job = await session.get(GmailNotificationJob, stale_failure.id)
+        assert state is not None and job is not None
+        assert state.resync_generation == 1
+        assert state.resync_state == "idle"
+        assert state.history_cursor == 150
+        assert job.state == "pending"
+        assert job.last_error_code == "mailbox_recovery_changed"
+
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-stale-normal-complete", history="151"), "projects/test/subscriptions/onebox"),
+        owner_id,
+    )
+    stale_completion = await claim_notification_job()
+    assert stale_completion is not None
+    assert stale_completion.resync_generation == 1
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        state.resync_generation = 2
+        state.resync_state = "manual_required"
+        state.resync_required = True
+        await session.commit()
+
+    assert await notification_jobs.complete_job_and_advance_cursor(stale_completion, history_cursor=999) is False
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        job = await session.get(GmailNotificationJob, stale_completion.id)
+        assert state is not None and job is not None
+        assert state.history_cursor == 150
+        assert state.resync_state == "manual_required"
+        assert job.state == "pending"
+        assert job.last_error_code == "mailbox_recovery_changed"
