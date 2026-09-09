@@ -56,6 +56,9 @@ class RedisAdapter:
         finally:
             self._slots.release()
 
+    async def ping(self) -> bool:
+        return bool(await self._run(self.client.ping()))
+
     async def get(self, key: str) -> str | None:
         return await self._run(self.client.get(key))
 

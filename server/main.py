@@ -4,14 +4,17 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from server.config import ServiceRole, settings
+from server.database import close_database
 from server.integrations.google import close_google_adapter
 from server.integrations.llm import close_llm_adapter
 from server.integrations.redis import close_redis_adapter
 from server.logging_config import setup_logging
 from server.routes import agent_oauth, agent_router, google_mail, push_router
 from server.schemas import ReadinessResponse
+from server.services.readiness import readiness_status
 from server.workers.mail_notifications import run_notification_worker
 
 setup_logging()
@@ -50,6 +53,7 @@ async def lifespan(app: FastAPI):
         await close_redis_adapter()
         await close_google_adapter()
         await close_llm_adapter()
+        await close_database()
 
 
 app = FastAPI(
@@ -69,6 +73,22 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.get("/livez")
+async def livez():
+    """Dependency-free process liveness probe."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """Dependency/schema-aware readiness probe; never calls Google APIs."""
+    ready, reason = await readiness_status()
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "unready", "reason": reason},
+    )
 
 
 @app.get("/", response_model=ReadinessResponse)

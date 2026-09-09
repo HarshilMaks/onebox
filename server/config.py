@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # Persistent services.
     DATABASE_URL: str
     REDIS_URL: str
+    DATABASE_CONNECT_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+    DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=100)
+    DATABASE_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
 
     # External provider isolation. Every synchronous SDK operation has a finite
     # caller deadline and bounded admission; streaming also has an idle limit.
@@ -362,6 +365,10 @@ class Settings(BaseSettings):
     @property
     def cors_allowed_origins(self) -> tuple[str, ...]:
         return tuple(filter(None, self.CORS_ALLOWED_ORIGINS.split(",")))
+
+    @property
+    def requires_redis(self) -> bool:
+        return self.SERVICE_ROLE in {ServiceRole.API, ServiceRole.COMBINED}
 
     @property
     def runs_automation(self) -> bool:

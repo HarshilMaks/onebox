@@ -16,10 +16,8 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.ext.declarative import declarative_base
 
-
-Base = declarative_base()
+from server.database import Base
 
 
 class AgentToken(Base):
@@ -112,6 +110,12 @@ class GmailNotificationJob(Base):
         UniqueConstraint("pubsub_message_id", name="uq_gmail_notification_jobs_pubsub_message_id"),
         Index("ix_gmail_notification_jobs_state_received", "state", "received_at"),
         Index("ix_gmail_notification_jobs_mailbox_history", "mailbox_email", "history_id"),
+        Index(
+            "ix_gmail_notification_jobs_state_next_attempt_received",
+            "state",
+            "next_attempt_at",
+            "received_at",
+        ),
         CheckConstraint(
             "state IN ('pending', 'processing', 'succeeded', 'dead_letter')",
             name="ck_gmail_notification_jobs_state",
@@ -187,6 +191,7 @@ class GmailTriageWork(Base):
     __table_args__ = (
         UniqueConstraint("mailbox_email", "message_id", name="uq_gmail_triage_work_mailbox_message"),
         Index("ix_gmail_triage_work_state", "state"),
+        Index("ix_gmail_triage_work_state_next_attempt", "state", "next_attempt_at"),
         CheckConstraint(
             "state IN ('processing', 'succeeded', 'noop', 'dead_letter')",
             name="ck_gmail_triage_work_state",

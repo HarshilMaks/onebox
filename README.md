@@ -175,18 +175,21 @@ The application is configured through environment variables in `.env`:
 
 All protected endpoints require an `Authorization: Bearer <JWT_TOKEN>` header.
 
-### 1. Health & Readiness
+### 1. Health, Liveness, and Readiness
 
 ```http
-GET / HTTP/1.1
+GET /livez HTTP/1.1
 Host: localhost:8000
 ```
 
-**Response (200 OK):**
+`/livez` reports dependency-free process liveness. `/readyz` returns `503` unless
+PostgreSQL is reachable and migrated to the Alembic head, role-required Redis is
+reachable, and local combined automation has a valid persisted worker state.
+
+**Liveness response (200 OK):**
 ```json
 {
-  "status": "ok",
-  "global_gmail_service": "ready"
+  "status": "ok"
 }
 ```
 
@@ -290,8 +293,10 @@ make compose-up
 ```
 
 `make compose-up` waits for PostgreSQL, applies Alembic migrations, then starts
-both the API and worker. The unauthenticated `/` route is process liveness only.
-The authenticated `/mail/agent/health` route reports Gmail readiness only when a
+both the API and worker. The unauthenticated `/livez` route is process liveness only.
+The unauthenticated `/readyz` route verifies PostgreSQL schema readiness and
+role-required Redis without making Google calls. The authenticated
+`/mail/agent/health` route reports Gmail readiness only when a
 valid unexpired watch and a fresh worker heartbeat exist. `/mail/agent/status`
 contains safe queue and recovery diagnostics.
 
