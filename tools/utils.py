@@ -6,22 +6,9 @@ import pytz
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from typing import List, Dict, Any, Mapping, Optional
-
-from server.mail.mime import extract_mail_content, parse_message_date
+from typing import Dict, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
-
-def extract_message_body(msg_payload: Dict[str, Any]) -> str:
-    """Return the bounded plain-text representation of an untrusted MIME payload."""
-    return extract_mail_content(msg_payload).body
-
-
-def parse_email_time(date_header: str) -> Optional[datetime]:
-    """Parse a mail date with a timezone-aware UTC fallback."""
-    if not date_header:
-        return None
-    return datetime.fromisoformat(parse_message_date(date_header))
 
 def create_raw_message(
     sender: str,

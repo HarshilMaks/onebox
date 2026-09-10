@@ -12,7 +12,7 @@ from server import main
 
 from server.logging_config import RedactingCorrelationFilter, bind_correlation_id, reset_correlation_id, setup_logging
 from server.routes.agent_router import AgentQuery
-from server.schemas import EmailDraft, OAuthCallback
+from server.schemas import EmailDraft
 
 
 def _record(message, args=()):
@@ -40,8 +40,6 @@ def test_agent_and_mail_request_bounds_fail_before_dispatch():
         EmailDraft(to=["owner@example.com"], subject="x" * 256, body="Body")
     with pytest.raises(ValidationError):
         EmailDraft(to=["owner@example.com"], subject="Hello", body="x" * 20_001)
-    with pytest.raises(ValidationError):
-        OAuthCallback(code="x" * 4_097, state="valid-state")
 
 
 def test_log_filter_redacts_secrets_content_and_email_addresses():

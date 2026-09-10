@@ -9,6 +9,7 @@ import pytest
 from server import redis_cache
 from server.mail.mime import MAX_BODY_BYTES, extract_mail_content, parse_message_date, parse_recipient_addresses
 from server.routes import google_mail
+from server.services import mailbox
 from server.schemas import EmailDetail
 
 
@@ -144,7 +145,7 @@ async def test_search_page_cache_round_trips_without_a_second_provider_call(monk
     async def execute(_service, request, **_kwargs):
         return request.run()
 
-    monkeypatch.setattr(google_mail, "_gmail_execute", execute)
+    monkeypatch.setattr(mailbox, "execute_gmail_request", execute)
     user = {"user_id": "user-1"}
     first = await google_mail.search_endpoint(
         q="from:owner@example.test",
@@ -243,7 +244,7 @@ def bypass_mail_cache(monkeypatch):
     async def execute(_service, request, **_kwargs):
         return request.run()
 
-    monkeypatch.setattr(google_mail, "_gmail_execute", execute)
+    monkeypatch.setattr(mailbox, "execute_gmail_request", execute)
 
 
 @pytest.mark.asyncio

@@ -112,10 +112,3 @@ async def get_tasks_service(
     connection: GoogleConnection = Depends(get_connected_google_connection),
 ) -> Resource:
     return await _build_service(connection, "tasks", "v1")
-
-
-async def get_user_email(
-    connection: GoogleConnection = Depends(get_connected_google_connection),
-) -> str:
-    """Return the persisted, verified Google identity without a provider round trip."""
-    return connection.google_email

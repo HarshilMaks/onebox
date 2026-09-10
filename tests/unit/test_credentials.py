@@ -81,7 +81,7 @@ def test_reconnect_dependency_maps_to_a_stable_non_500_response(monkeypatch):
 def test_routes_and_provider_dependencies_do_not_parse_raw_token_json_or_use_jwt_sender_email():
     oauth_route = (REPOSITORY_ROOT / "server/routes/agent_oauth.py").read_text(encoding="utf-8")
     provider_dependencies = (REPOSITORY_ROOT / "server/services/setup_google.py").read_text(encoding="utf-8")
-    worker = (REPOSITORY_ROOT / "server/services/mail.py").read_text(encoding="utf-8")
+    worker = (REPOSITORY_ROOT / "server/mail/inbound.py").read_text(encoding="utf-8")
     agent_route = (REPOSITORY_ROOT / "server/routes/agent_router.py").read_text(encoding="utf-8")
 
     assert "token_json" not in oauth_route

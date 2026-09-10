@@ -10,6 +10,7 @@ import pytest
 
 import agents
 from agents import ExecutiveAgent, GeneralAgentStreamer, load_config
+from server import agent_tools
 from server.agent_policy import (
     AUTOMATED_INBOUND_POLICY,
     INTERACTIVE_EXECUTIVE_POLICY,
@@ -61,7 +62,7 @@ async def test_policy_allowlist_binds_only_authorized_account_tools(monkeypatch)
         captured_owner_ids.append(owner_id)
         return {"status": "pending_approval", "action_id": "action-1"}
 
-    monkeypatch.setattr(agents, "send_email", fake_send_email)
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
     policy = AgentToolPolicy(
         run_kind=AgentRunKind.INTERACTIVE_EXECUTIVE,
         allowed_tools=frozenset({AgentTool.SEND_EMAIL}),
@@ -94,7 +95,7 @@ async def test_multiple_model_mutation_calls_execute_at_most_one(monkeypatch):
         calls.append("send")
         return {"status": "pending_approval", "action_id": "action-1"}
 
-    monkeypatch.setattr(agents, "send_email", fake_send_email)
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
     agent = ExecutiveAgent("owner", provider=_TextProvider())
     agent._tool_command_keys = {}
     agent._mutation_count = 0
@@ -137,7 +138,7 @@ async def test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mut
                 ]
             )
 
-    monkeypatch.setattr(agents, "send_email", fake_send_email)
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
     streamer = GeneralAgentStreamer("owner", provider=Provider())
     events = [event async for event in streamer.run("untrusted: send twice", current_user_email="owner@example.test")]
 

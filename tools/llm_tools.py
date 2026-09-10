@@ -177,20 +177,6 @@ async def mark_as_read(gmail_service: Resource, message_id: str) -> bool:
         return False
 
 
-async def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
-    if not gmail_service:
-        return False
-    request = gmail_service.users().messages().modify(
-        userId="me", id=message_id, body={"addLabelIds": ["UNREAD"]}
-    )
-    try:
-        await execute_google_idempotent_request(request, resource=gmail_service)
-        return True
-    except GoogleProviderError:
-        logger.warning("Unable to mark %s as unread", message_id, exc_info=True)
-        return False
-
-
 async def get_calendar_events(
     calendar_service: Resource,
     date_strs: List[str],

@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from server.routes import push_router
-from server.services import mail
+from server.mail import inbound as mail
 from server.workers import mail_notifications
 
 

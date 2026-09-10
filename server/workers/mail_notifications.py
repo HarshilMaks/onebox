@@ -23,7 +23,7 @@ from server.services.credentials import (
     build_google_api_service,
     load_connected_google_connection,
 )
-from server.services.mail import extract_email_content, should_process_email
+from server.mail.inbound import extract_email_content, should_process_email
 from server.services.retention import prune_retained_records
 from server.services.notification_jobs import (
     ClaimedNotificationJob,

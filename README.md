@@ -45,7 +45,7 @@ OneBox follows a modular, layered architecture separating HTTP routes, agent exe
                │                               │
 ┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
 │  SQLAlchemy & PostgreSQL    │ │     Background Worker       │
-│  (Tokens & Pending Actions) │ │    (mail.py triage loop)    │
+│  (Tokens & Pending Actions) │ │ (notification triage worker) │
 └─────────────────────────────┘ └──────────────┬──────────────┘
                                                │
                                 ┌──────────────▼──────────────┐
@@ -319,24 +319,20 @@ docker compose down
 ```
 onebox/
 ├── server/
-│   ├── routes/              # API endpoints
-│   │   ├── agent_oauth.py   # Google OAuth start & callback flows
-│   │   ├── agent_router.py  # Agent execution & pending action approval
-│   │   ├── google_mail.py   # Gmail fetch, search, star, trash operations
-│   │   └── push_router.py   # Google Pub/Sub push notification receiver
-│   ├── services/            # Core business & background services
-│   │   ├── mail.py          # Background email worker & triage pipeline
-│   │   ├── pending_actions.py # Human-in-the-loop pending action store
-│   │   └── setup_google.py  # Google API service builders & JWT auth
+│   ├── agent_policy.py      # Immutable per-run agent authorization policy
+│   ├── agent_tools.py       # Gemini declarations and trusted tool bindings
+│   ├── integrations/        # Google, Gmail, LLM, and Redis adapters
+│   ├── mail/                # MIME parsing and inbound notification triage
+│   ├── routes/              # HTTP endpoints and Pub/Sub ingress
+│   ├── services/            # Mailbox use cases and durable action services
+│   ├── workers/             # Durable Gmail notification worker
 │   ├── models.py            # SQLAlchemy database models
-│   ├── database.py          # Async database engine & session factory
+│   ├── database.py          # Sole metadata base, engine, and session factory
 │   ├── redis_cache.py       # Redis caching utilities
-│   └── main.py              # FastAPI application entrypoint & lifespan
+│   └── main.py              # FastAPI application entrypoint and lifespan
 ├── tools/                   # Agent tool implementations
-│   ├── calender/            # Google Calendar tool & invite generators
-│   ├── email/               # Gmail send, reply, and draft tools
-│   ├── tasks/               # Google Tasks creation & list management
-│   └── llm_tools.py         # Standardized tool declarations for Gemini
+│   ├── llm_tools.py         # Pending-action and interactive Google tool callables
+│   └── utils.py             # Shared raw-message and header helpers
 ├── clients/                 # LLM client abstractions & system prompts
 │   ├── base.py              # Vertex AI & GenAI client setup
 │   └── prompt.py            # Executive & email agent system instructions

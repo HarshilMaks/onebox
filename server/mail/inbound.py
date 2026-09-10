@@ -1,4 +1,5 @@
-"""Stateless inbound Gmail parsing/filtering helpers for durable workers."""
+"""Stateless inbound Gmail parsing and analysis-only triage filtering."""
+
 from __future__ import annotations
 
 import base64
@@ -6,11 +7,12 @@ import logging
 import re
 from typing import Any
 
+
 logger = logging.getLogger(__name__)
 
 
 def should_process_email(email_content: dict[str, Any]) -> bool:
-    """Apply the current analysis-only skip policy without mutating mailbox state."""
+    """Apply the analysis-only skip policy without mutating mailbox state."""
     if "error" in email_content:
         return False
     from_field = str(email_content.get("from", "")).lower()
@@ -25,7 +27,7 @@ def should_process_email(email_content: dict[str, Any]) -> bool:
 
 
 def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
-    """Extract bounded message fields; malformed provider payloads stay terminal errors."""
+    """Extract bounded fields; malformed provider payloads are terminal errors."""
     try:
         if not isinstance(email_data, dict):
             raise ValueError("message must be an object")
@@ -63,7 +65,7 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_email_body(payload: dict[str, Any]) -> str:
-    """Extract text safely; malformed nested Gmail payloads are never coerced to empty text."""
+    """Extract text safely; malformed nested Gmail parts are never coerced."""
     if not isinstance(payload, dict):
         raise ValueError("invalid MIME part")
     body = payload.get("body")

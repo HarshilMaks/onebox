@@ -1,13 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse, StarStateUpdate
+from server.schemas import EmailDetail, EmailDraft, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse, StarStateUpdate
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
 import base64
 import hashlib
 import logging
-from typing import List, Dict, Any, Optional
-from uuid import UUID
 from server.services.setup_google import get_current_user_info, get_gmail_service
 from server.redis_cache import (
     MAIL_DETAIL_CACHE_TTL_SECONDS,
@@ -17,197 +15,15 @@ from server.redis_cache import (
     invalidate_user_mail_cache,
     user_mail_cache_key,
 )
-from server.integrations.google import (
-    GoogleOperationInternal,
-    GoogleOperationRejected,
-    GoogleOperationTimeout,
-    GoogleOperationUnavailable,
-    GoogleOperationSafety,
-    execute_google_idempotent_request,
-    execute_google_read_request,
-    execute_google_request,
-)
-from server.mail.mime import (
-    MAX_HEADER_VALUE_CHARS,
-    extract_mail_content,
-    first_recipient_address,
-    parse_message_date,
-    parse_recipient_addresses,
-)
-
-
-def _mail_provider_error(error: Exception) -> HTTPException:
-    if isinstance(error, GoogleOperationTimeout):
-        return HTTPException(status_code=504, detail="Gmail request timed out. Please try again.")
-    if isinstance(error, GoogleOperationUnavailable):
-        return HTTPException(status_code=503, detail="Gmail is temporarily unavailable. Please try again.")
-    if isinstance(error, GoogleOperationRejected):
-        status_code = error.status_code if error.status_code and 400 <= error.status_code < 500 else 502
-        return HTTPException(status_code=status_code, detail="Gmail request failed. Please try again.")
-    return HTTPException(status_code=502, detail="Gmail request failed. Please try again.")
-
-
-async def _gmail_execute(
-    service: Resource,
-    request: Any,
-    *,
-    safety: GoogleOperationSafety = GoogleOperationSafety.AMBIGUOUS_WRITE,
-) -> Any:
-    """Execute Gmail work with retries only when the operation is safe to repeat."""
-    try:
-        if safety is GoogleOperationSafety.READ:
-            return await execute_google_read_request(request, resource=service)
-        if safety is GoogleOperationSafety.IDEMPOTENT_WRITE:
-            return await execute_google_idempotent_request(request, resource=service)
-        return await execute_google_request(request, resource=service)
-    except (
-        GoogleOperationInternal,
-        GoogleOperationRejected,
-        GoogleOperationTimeout,
-        GoogleOperationUnavailable,
-    ) as exc:
-        logger.warning("Gmail provider operation failed", exc_info=True)
-        raise _mail_provider_error(exc) from None
+from server.integrations.gmail import execute_gmail_request as _gmail_execute
+from server.integrations.google import GoogleOperationSafety
+from server.services.mailbox import fetch_message_page as _fetch_message_page
+from server.services.mailbox import parse_message, search_emails
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mail", tags=["Email-Operations"])
-
-
-async def parse_message(service: Resource, msg: Dict[str, Any], user_id_for_attachments: str = "me") -> Dict[str, Any]:
-    """Return a bounded, rendering-safe mail detail from a Gmail message."""
-    payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
-    headers: dict[str, str] = {}
-    for header in payload.get("headers", []):
-        if not isinstance(header, dict):
-            continue
-        name = header.get("name")
-        value = header.get("value")
-        if isinstance(name, str) and isinstance(value, str):
-            headers[name.lower()] = value[:MAX_HEADER_VALUE_CHARS]
-
-    content = extract_mail_content(payload)
-    snippet = msg.get("snippet")
-    safe_snippet = snippet[:MAX_HEADER_VALUE_CHARS] if isinstance(snippet, str) else ""
-    sender_header = headers.get("from")
-    sender_fallback = sender_header or "Unknown Sender"
-    return {
-        "id": msg.get("id"),
-        "threadId": msg.get("threadId"),
-        "subject": headers.get("subject", "(No Subject)"),
-        "sender": first_recipient_address(sender_header, fallback=sender_fallback),
-        "to": parse_recipient_addresses(headers.get("to")),
-        "cc": parse_recipient_addresses(headers.get("cc")),
-        "snippet": safe_snippet,
-        # `body` is always plain text.  Sanitized HTML, when no plain part is
-        # available, is opt-in through the explicitly named field below.
-        "body": content.body or safe_snippet,
-        "sanitized_html": content.sanitized_html,
-        "is_read": "UNREAD" not in msg.get("labelIds", []),
-        "is_starred": "STARRED" in msg.get("labelIds", []),
-        "labels": msg.get("labelIds", []),
-        "date": parse_message_date(headers.get("date"), msg.get("internalDate")),
-    }
-
-
-def to_email_list_item(email: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the stable summary contract used by list and search endpoints."""
-    return {
-        "id": email["id"],
-        "threadId": email.get("threadId"),
-        "subject": email.get("subject", "(No Subject)"),
-        "sender": email.get("sender", "Unknown Sender"),
-        "to": email.get("to", []),
-        "snippet": email.get("snippet", ""),
-        "is_read": email.get("is_read", False),
-        "is_starred": email.get("is_starred", False),
-        "labels": email.get("labels", []),
-        "date": email.get("date"),
-    }
-
-
-async def _fetch_message_page(
-    service: Resource,
-    *,
-    user_id: str,
-    limit: int,
-    page_token: str | None = None,
-    label_ids: list[str] | None = None,
-    query: str | None = None,
-) -> dict[str, Any]:
-    """Fetch exactly one Gmail provider page and its bounded set of details."""
-    request_params: dict[str, Any] = {"userId": user_id, "maxResults": limit}
-    if page_token:
-        request_params["pageToken"] = page_token
-    if label_ids:
-        request_params["labelIds"] = label_ids
-    if query:
-        request_params["q"] = query
-
-    response = await _gmail_execute(
-        service, service.users().messages().list(**request_params), safety=GoogleOperationSafety.READ
-    )
-    messages_metadata = response.get("messages", [])
-    if not isinstance(messages_metadata, list) or not messages_metadata:
-        return {"emails": [], "next_page_token": response.get("nextPageToken")}
-
-    batch = service.new_batch_http_request()
-    message_details: dict[str, dict[str, Any]] = {}
-
-    def parse_batch_response(request_id: str, batch_response: Any, exception: Exception | None) -> None:
-        if exception is not None or not isinstance(batch_response, dict):
-            logger.warning("Gmail message detail could not be fetched")
-            return
-        message_id = batch_response.get("id")
-        if isinstance(message_id, str):
-            message_details[message_id] = batch_response
-
-    for metadata in messages_metadata[:limit]:
-        if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
-            continue
-        message_id = metadata["id"]
-        batch.add(
-            service.users().messages().get(userId=user_id, id=message_id, format="full"),
-            callback=parse_batch_response,
-            request_id=message_id,
-        )
-    await _gmail_execute(service, batch, safety=GoogleOperationSafety.READ)
-
-    emails: list[dict[str, Any]] = []
-    for metadata in messages_metadata[:limit]:
-        if not isinstance(metadata, dict):
-            continue
-        message_id = metadata.get("id")
-        if isinstance(message_id, str) and (raw_message := message_details.get(message_id)) is not None:
-            emails.append(to_email_list_item(await parse_message(service, raw_message, user_id)))
-    return {"emails": emails, "next_page_token": response.get("nextPageToken")}
-
-
-async def search_emails(
-    service: Resource,
-    query: str,
-    *,
-    user_id: str = "me",
-    limit: int = 20,
-    page_token: str | None = None,
-) -> dict[str, Any]:
-    """Search one provider page; Gmail's opaque token prevents gaps and duplicates."""
-    try:
-        return await _fetch_message_page(
-            service,
-            user_id=user_id,
-            limit=limit,
-            page_token=page_token,
-            query=query,
-        )
-    except HTTPException:
-        raise
-    except HttpError as exc:
-        raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
-    except Exception:
-        logger.exception("Unexpected Gmail search failure")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 
 # ---------- Endpoints ----------

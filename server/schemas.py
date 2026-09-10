@@ -45,25 +45,6 @@ class EmailPage(BaseModel):
     next_page_token: Optional[str] = None
 
 
-class OAuthCallback(BaseModel):
-    code: str = Field(min_length=1, max_length=4_096)
-    state: str | None = Field(default=None, min_length=1, max_length=512)
-
-
-class TokenInfo(BaseModel):
-    access_token: str
-    refresh_token: str
-    scope: str
-    token_type: str
-    expires_in: int
-
-
-class AgentTokenOut(BaseModel):
-    user_id: UUID
-    token: TokenInfo
-    updated_at: datetime
-
-
 class AgentSuccessResponse(BaseModel):
     """Standard envelope for a successful non-streaming agent response."""
 
