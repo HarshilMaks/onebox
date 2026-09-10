@@ -16,6 +16,7 @@ from server.action_payloads import canonicalize_action_payload
 from server.integrations.google import (
     GoogleOperationRejected,
     GoogleProviderError,
+    execute_google_read_request,
     execute_google_request,
     run_google_operation,
 )
@@ -292,7 +293,7 @@ async def _reconcile_gmail(
         kwargs: dict[str, Any] = {"userId": "me", "q": query, "maxResults": 10}
         if page_token:
             kwargs["pageToken"] = page_token
-        response = await execute_google_request(
+        response = await execute_google_read_request(
             gmail_service.users().messages().list(**kwargs),
             resource=gmail_service,
         )
@@ -308,7 +309,7 @@ async def _reconcile_gmail(
         return ReconciliationResult("failed", None, "provider_not_found", {"lookup": "not_found"})
     # A second result would have returned above; only exact uniqueness can be
     # accepted as proof of external command acceptance.
-    message = await execute_google_request(
+    message = await execute_google_read_request(
         gmail_service.users().messages().get(userId="me", id=matches[0]["id"], format="metadata"),
         resource=gmail_service,
     )
@@ -334,7 +335,7 @@ async def _reconcile_gmail(
 
 async def _reconcile_calendar(action: Mapping[str, Any], calendar_service: Any) -> ReconciliationResult:
     event_id = calendar_event_id(action["command_key"])
-    event = await execute_google_request(
+    event = await execute_google_read_request(
         calendar_service.events().get(calendarId="primary", eventId=event_id), resource=calendar_service
     )
     private = event.get("extendedProperties", {}).get("private", {}) if event else {}

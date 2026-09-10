@@ -275,17 +275,17 @@ async def resolve_reply_target(
         q=_query_for_reply(recipient_email, subject_filter),
         maxResults=1,
     )
-    from server.integrations.google import execute_google_request
+    from server.integrations.google import execute_google_read_request
     from tools.utils import get_header_value
 
-    response = await execute_google_request(request, resource=gmail_service)
+    response = await execute_google_read_request(request, resource=gmail_service)
     messages = response.get("messages", [])
     if not messages:
         raise PendingActionExecutionError("No matching email was found for this reply.")
     original_message_id = messages[0].get("id")
     if not original_message_id:
         raise PendingActionExecutionError("Reply target did not include a message ID.")
-    source = await execute_google_request(
+    source = await execute_google_read_request(
         gmail_service.users().messages().get(userId="me", id=original_message_id, format="metadata"),
         resource=gmail_service,
     )

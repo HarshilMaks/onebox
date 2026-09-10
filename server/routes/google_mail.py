@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse
+from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse, StarStateUpdate
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
@@ -22,6 +22,9 @@ from server.integrations.google import (
     GoogleOperationRejected,
     GoogleOperationTimeout,
     GoogleOperationUnavailable,
+    GoogleOperationSafety,
+    execute_google_idempotent_request,
+    execute_google_read_request,
     execute_google_request,
 )
 from server.mail.mime import (
@@ -44,8 +47,18 @@ def _mail_provider_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail="Gmail request failed. Please try again.")
 
 
-async def _gmail_execute(service: Resource, request: Any) -> Any:
+async def _gmail_execute(
+    service: Resource,
+    request: Any,
+    *,
+    safety: GoogleOperationSafety = GoogleOperationSafety.AMBIGUOUS_WRITE,
+) -> Any:
+    """Execute Gmail work with retries only when the operation is safe to repeat."""
     try:
+        if safety is GoogleOperationSafety.READ:
+            return await execute_google_read_request(request, resource=service)
+        if safety is GoogleOperationSafety.IDEMPOTENT_WRITE:
+            return await execute_google_idempotent_request(request, resource=service)
         return await execute_google_request(request, resource=service)
     except (
         GoogleOperationInternal,
@@ -132,7 +145,9 @@ async def _fetch_message_page(
     if query:
         request_params["q"] = query
 
-    response = await _gmail_execute(service, service.users().messages().list(**request_params))
+    response = await _gmail_execute(
+        service, service.users().messages().list(**request_params), safety=GoogleOperationSafety.READ
+    )
     messages_metadata = response.get("messages", [])
     if not isinstance(messages_metadata, list) or not messages_metadata:
         return {"emails": [], "next_page_token": response.get("nextPageToken")}
@@ -157,7 +172,7 @@ async def _fetch_message_page(
             callback=parse_batch_response,
             request_id=message_id,
         )
-    await _gmail_execute(service, batch)
+    await _gmail_execute(service, batch, safety=GoogleOperationSafety.READ)
 
     emails: list[dict[str, Any]] = []
     for metadata in messages_metadata[:limit]:
@@ -261,6 +276,7 @@ async def fetch_email_by_id(
         msg = await _gmail_execute(
             service,
             service.users().messages().get(userId=gmail_user_id_param, id=email_id, format='full'),
+            safety=GoogleOperationSafety.READ,
         )
         parsed_email = await parse_message(service, msg, user_id_for_attachments=gmail_user_id_param)
         await cache_set(cache_key, parsed_email, ttl=MAIL_DETAIL_CACHE_TTL_SECONDS)
@@ -292,6 +308,7 @@ async def mark_as_read(
             service.users().messages().modify(
                 userId='me', id=email_id, body={'removeLabelIds': ['UNREAD']}
             ),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
         # Invalidate cache for this email and relevant lists
         await invalidate_user_mail_cache(str(user_id), email_id)
@@ -315,6 +332,7 @@ async def mark_as_unread(
             service.users().messages().modify(
                 userId='me', id=email_id, body={'addLabelIds': ['UNREAD']}
             ),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "marked as unread"}
@@ -396,57 +414,34 @@ async def delete_email(
 
 
 @router.post("/emails/{email_id}/star", response_model=MailMutationResponse)
-async def toggle_star(
+async def set_star_state(
+    state: StarStateUpdate,
     email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
-    # star_status: bool, # If you want to set specific status, not just toggle
     user_info: dict = Depends(get_current_user_info),
-    service: Resource = Depends(get_gmail_service)
+    service: Resource = Depends(get_gmail_service),
 ):
+    """Set the desired star label exactly; no read-then-toggle race exists."""
     user_id = user_info["user_id"]
-    logger.info(f"Toggling star for email: {email_id} for user: {user_id}")
+    body = {"addLabelIds": ["STARRED"]} if state.starred else {"removeLabelIds": ["STARRED"]}
     try:
-        msg = await _gmail_execute(
-            service,
-            service.users().messages().get(userId='me', id=email_id, format='minimal'),
-        )
-        labels = msg.get('labelIds', [])
-        is_starred = 'STARRED' in labels
-        
-        # If you want to set specific status based on a param:
-        # desired_starred_state = star_status 
-        # add_labels = ['STARRED'] if desired_starred_state and not is_starred else []
-        # remove_labels = ['STARRED'] if not desired_starred_state and is_starred else []
-        
-        # For simple toggle:
-        add_labels = [] if is_starred else ['STARRED']
-        remove_labels = ['STARRED'] if is_starred else []
-
-        body_mod = {}
-        if add_labels: body_mod['addLabelIds'] = add_labels
-        if remove_labels: body_mod['removeLabelIds'] = remove_labels
-
-        if not body_mod: # No change needed
-            new_status = "starred" if is_starred else "unstarred"
-            logger.info(f"No label change needed for email {email_id}, current status: {new_status}")
-            return {"id": email_id, "status": new_status, "action": "no_change"}
-
         await _gmail_execute(
             service,
-            service.users().messages().modify(userId='me', id=email_id, body=body_mod),
+            service.users().messages().modify(userId="me", id=email_id, body=body),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
-        new_status = "unstarred" if is_starred else "starred" # This is the old status, after toggle it's reversed
-        
         await invalidate_user_mail_cache(str(user_id), email_id)
-
-        return {"id": email_id, "status": "starred" if not is_starred else "unstarred"} # Return new status
-    except HttpError as e:
-        logger.exception(f"Failed to toggle star for email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
+        return {
+            "id": email_id,
+            "status": "starred" if state.starred else "unstarred",
+            "action": "set",
+        }
+    except HttpError as exc:
+        raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while toggling star for email {email_id} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
+    except Exception:
+        logger.exception("Gmail star-state update failed")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 @router.post("/send", response_model=SendEmailResponse)
 async def send_email_api( # Renamed to avoid conflict
@@ -564,6 +559,7 @@ async def check_inbox_api( # Renamed
         response = await _gmail_execute(
             service,
             service.users().labels().get(userId='me', id='INBOX'),
+            safety=GoogleOperationSafety.READ,
         )
         count = response.get('messagesTotal', 0) # messagesUnread might also be useful
         logger.info(f"Inbox total messages estimate for user {user_id}: {count}")

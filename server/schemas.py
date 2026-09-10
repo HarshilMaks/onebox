@@ -94,13 +94,17 @@ class PublicErrorResponse(AgentErrorResponse):
 
 
 class MailMutationResponse(BaseModel):
-    """Standard response for a single-email mutation (read/unread/trash/
-    restore/delete/star). `action` is only present for the star endpoint,
-    which can report a no-op when the requested state already matches."""
+    """Stable response for a single-email mutation."""
 
     id: str
     status: str
     action: Optional[str] = None
+
+
+class StarStateUpdate(BaseModel):
+    """Desired final star state for an idempotent Gmail mutation."""
+
+    starred: bool
 
 
 class SendEmailResponse(BaseModel):

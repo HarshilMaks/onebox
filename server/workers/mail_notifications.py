@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from time import monotonic
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -23,6 +24,7 @@ from server.services.credentials import (
     load_connected_google_connection,
 )
 from server.services.mail import extract_email_content, should_process_email
+from server.services.retention import prune_retained_records
 from server.services.notification_jobs import (
     ClaimedNotificationJob,
     ClaimedMailboxResync,
@@ -393,8 +395,12 @@ async def run_notification_worker(stop_event: asyncio.Event, owner_id: UUID) -> 
         settings.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS,
         settings.GMAIL_NOTIFICATION_POLL_SECONDS,
     )
+    last_retention_cleanup = 0.0
     while not stop_event.is_set():
         try:
+            if monotonic() - last_retention_cleanup >= settings.RETENTION_CLEANUP_INTERVAL_SECONDS:
+                await prune_retained_records()
+                last_retention_cleanup = monotonic()
             await record_worker_heartbeat(owner_id)
             await renew_automation_watch(owner_id)
             claim = await claim_notification_job()

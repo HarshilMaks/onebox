@@ -388,3 +388,29 @@ Agent prompts render current time per invocation using an IANA `ZoneInfo`
 timezone from the deployment profile. SSE agent streams are nonblocking,
 disconnect-cancellable, deadline/queue-bounded, emit heartbeat comment frames,
 and finish with exactly one `done` or `error` event; they do not support replay.
+
+
+### Provider retry, identity, and retention policy
+
+Google provider failures are classified as permanent, authentication/reconnect,
+quota, retryable transport/read, ambiguous write, or internal. Only read
+operations and explicitly idempotent mutations use bounded exponential backoff
+with jitter and a provider `Retry-After` floor. Email sends, replies, calendar
+creation, task creation, deletion, and other ambiguous writes are dispatched
+once; an uncertain outcome remains `reconciliation_required` and is never
+blind-retried. Gmail star updates accept an explicit desired `starred` state,
+not a read-then-toggle operation.
+
+The persisted case-normalized Google email is the authoritative connected
+account and sender identity. OneBox deliberately fails closed when a selected
+or persisted account email changes; it does not silently reuse credentials for
+a renamed/different account. Legacy account rows are normalized during safe
+credential loading or OAuth persistence.
+
+Terminal pending-action payloads are retained for **30 days**; terminal Gmail
+notification jobs and triage summaries for **14 days**. Reconciliation-required
+actions are retained for operator resolution. The durable worker performs the
+configured periodic cleanup. Mail-cache retention remains limited to its 5
+minute detail and 60 second page TTLs. In production PostgreSQL must require
+TLS, and Redis must be authenticated and use `rediss://` unless explicitly
+configured as a controlled trusted local network.

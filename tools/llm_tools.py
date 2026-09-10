@@ -5,7 +5,12 @@ from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from googleapiclient.discovery import Resource
-from server.integrations.google import GoogleProviderError, execute_google_request
+from server.integrations.google import (
+    GoogleProviderError,
+    execute_google_idempotent_request,
+    execute_google_read_request,
+    execute_google_request,
+)
 from server.services.pending_actions import (
     ACTION_CREATE_EVENT,
     ACTION_CREATE_TASK,
@@ -165,7 +170,7 @@ async def mark_as_read(gmail_service: Resource, message_id: str) -> bool:
         userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
     )
     try:
-        await execute_google_request(request, resource=gmail_service)
+        await execute_google_idempotent_request(request, resource=gmail_service)
         return True
     except GoogleProviderError:
         logger.warning("Unable to mark %s as read", message_id, exc_info=True)
@@ -179,7 +184,7 @@ async def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
         userId="me", id=message_id, body={"addLabelIds": ["UNREAD"]}
     )
     try:
-        await execute_google_request(request, resource=gmail_service)
+        await execute_google_idempotent_request(request, resource=gmail_service)
         return True
     except GoogleProviderError:
         logger.warning("Unable to mark %s as unread", message_id, exc_info=True)
@@ -217,7 +222,7 @@ async def get_calendar_events(
             orderBy="startTime",
         )
         try:
-            events_result = await execute_google_request(request, resource=calendar_service)
+            events_result = await execute_google_read_request(request, resource=calendar_service)
         except GoogleProviderError:
             logger.warning("Calendar lookup failed for %s", date_str, exc_info=True)
             results[date_str] = "Calendar service is temporarily unavailable."

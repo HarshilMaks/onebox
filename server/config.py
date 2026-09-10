@@ -4,7 +4,7 @@ from enum import Enum
 import os
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -101,6 +101,21 @@ class Settings(BaseSettings):
     LLM_STREAM_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=600)
     LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
+    # Safe provider reads/idempotent writes use this observable bounded retry policy.
+    # Ambiguous external writes are never retried by this policy.
+    PROVIDER_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    PROVIDER_RETRY_INITIAL_SECONDS: float = Field(default=0.25, gt=0, le=60)
+    PROVIDER_RETRY_MAX_SECONDS: float = Field(default=2.0, gt=0, le=300)
+    PROVIDER_RETRY_DEADLINE_SECONDS: float = Field(default=10.0, gt=0, le=600)
+    # Retention applies only to terminal records; reconciliation-required actions
+    # remain available for explicit operator resolution.
+    PENDING_ACTION_RETENTION_DAYS: int = Field(default=30, ge=1, le=3650)
+    GMAIL_JOB_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
+    GMAIL_TRIAGE_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
+    RETENTION_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600, ge=60, le=86_400)
+    # Set only for a controlled local/private network. Production otherwise
+    # requires authenticated TLS Redis; PostgreSQL TLS is always required.
+    REDIS_TRUSTED_LOCAL_NETWORK: bool = False
 
     # Durable Gmail Pub/Sub ingestion/worker limits. Jobs are PostgreSQL-backed
     # and every lease is finite so a crash can be reconciled safely.
@@ -299,6 +314,10 @@ class Settings(BaseSettings):
 
         if self.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS > self.GMAIL_RETRY_BACKOFF_MAX_SECONDS:
             raise ValueError("GMAIL_RETRY_BACKOFF_INITIAL_SECONDS must not exceed GMAIL_RETRY_BACKOFF_MAX_SECONDS")
+        if self.PROVIDER_RETRY_INITIAL_SECONDS > self.PROVIDER_RETRY_MAX_SECONDS:
+            raise ValueError("PROVIDER_RETRY_INITIAL_SECONDS must not exceed PROVIDER_RETRY_MAX_SECONDS")
+        if self.PROVIDER_RETRY_DEADLINE_SECONDS < self.PROVIDER_RETRY_INITIAL_SECONDS:
+            raise ValueError("PROVIDER_RETRY_DEADLINE_SECONDS must cover at least one retry delay")
 
         if self.SERVICE_ROLE is ServiceRole.COMBINED and self.ENVIRONMENT not in {
             Environment.DEVELOPMENT,
@@ -345,6 +364,15 @@ class Settings(BaseSettings):
                     raise ValueError(f"{setting_name} must use HTTPS in production")
             if any(urlsplit(origin).scheme != "https" for origin in self.cors_allowed_origins):
                 raise ValueError("CORS_ALLOWED_ORIGINS must use HTTPS in production")
+            database_query = parse_qs(urlsplit(self.DATABASE_URL).query)
+            database_tls = database_query.get("ssl", database_query.get("sslmode", [""]))[0].casefold()
+            if database_tls not in {"require", "verify-ca", "verify-full"}:
+                raise ValueError("DATABASE_URL must require PostgreSQL TLS in production")
+            redis_url = urlsplit(self.REDIS_URL)
+            if not redis_url.password:
+                raise ValueError("REDIS_URL must include Redis authentication in production")
+            if not self.REDIS_TRUSTED_LOCAL_NETWORK and redis_url.scheme != "rediss":
+                raise ValueError("REDIS_URL must use rediss:// outside a trusted local network in production")
 
         return self
 

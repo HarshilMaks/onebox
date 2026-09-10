@@ -141,7 +141,7 @@ async def test_search_page_cache_round_trips_without_a_second_provider_call(monk
     service = _PagedGmailService()
     monkeypatch.setattr(redis_cache, "get_redis_adapter", lambda: adapter)
 
-    async def execute(_service, request):
+    async def execute(_service, request, **_kwargs):
         return request.run()
 
     monkeypatch.setattr(google_mail, "_gmail_execute", execute)
@@ -240,7 +240,7 @@ def bypass_mail_cache(monkeypatch):
     monkeypatch.setattr(google_mail, "cache_get", cache_miss)
     monkeypatch.setattr(google_mail, "cache_set", ignored_cache_write)
 
-    async def execute(_service, request):
+    async def execute(_service, request, **_kwargs):
         return request.run()
 
     monkeypatch.setattr(google_mail, "_gmail_execute", execute)

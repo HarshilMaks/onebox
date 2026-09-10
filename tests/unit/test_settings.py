@@ -234,3 +234,44 @@ def test_retry_backoff_bounds_are_validated(settings_class):
             GMAIL_RETRY_BACKOFF_INITIAL_SECONDS=10,
             GMAIL_RETRY_BACKOFF_MAX_SECONDS=5,
         )
+
+
+def test_provider_retry_bounds_and_production_transport_policy(settings_class):
+    with pytest.raises(ValidationError, match="PROVIDER_RETRY_INITIAL_SECONDS"):
+        build_settings(
+            settings_class,
+            PROVIDER_RETRY_INITIAL_SECONDS=3,
+            PROVIDER_RETRY_MAX_SECONDS=2,
+        )
+
+    secure = build_settings(
+        settings_class,
+        ENVIRONMENT="production",
+        OAUTH_REDIRECT_URI="https://api.example.invalid/agent/oauth/callback",
+        FRONTEND_OAUTH_CALLBACK_URI="https://app.example.invalid/mail/inbox",
+        CORS_ALLOWED_ORIGINS="https://app.example.invalid",
+        DATABASE_URL="postgresql+asyncpg://onebox:test-password@db.example.invalid/onebox?ssl=require",
+        REDIS_URL="rediss://:redis-password@redis.example.invalid:6380/0",
+    )
+    assert secure.ENVIRONMENT.value == "production"
+
+    with pytest.raises(ValidationError, match="PostgreSQL TLS"):
+        build_settings(
+            settings_class,
+            ENVIRONMENT="production",
+            OAUTH_REDIRECT_URI="https://api.example.invalid/agent/oauth/callback",
+            FRONTEND_OAUTH_CALLBACK_URI="https://app.example.invalid/mail/inbox",
+            CORS_ALLOWED_ORIGINS="https://app.example.invalid",
+            REDIS_URL="rediss://:redis-password@redis.example.invalid:6380/0",
+        )
+
+    with pytest.raises(ValidationError, match="rediss"):
+        build_settings(
+            settings_class,
+            ENVIRONMENT="production",
+            OAUTH_REDIRECT_URI="https://api.example.invalid/agent/oauth/callback",
+            FRONTEND_OAUTH_CALLBACK_URI="https://app.example.invalid/mail/inbox",
+            CORS_ALLOWED_ORIGINS="https://app.example.invalid",
+            DATABASE_URL="postgresql+asyncpg://onebox:test-password@db.example.invalid/onebox?ssl=require",
+            REDIS_URL="redis://:redis-password@redis.example.invalid:6379/0",
+        )

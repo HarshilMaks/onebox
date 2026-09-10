@@ -31,13 +31,21 @@ async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
         stop_event.set()
         return None
 
+    async def cleanup():
+        return None
+
     monkeypatch.setattr(mail_notifications, "record_worker_heartbeat", heartbeat)
     monkeypatch.setattr(mail_notifications, "renew_automation_watch", renew)
     monkeypatch.setattr(mail_notifications, "claim_notification_job", claim)
+    monkeypatch.setattr(mail_notifications, "prune_retained_records", cleanup)
     monkeypatch.setattr(
         mail_notifications,
         "settings",
-        SimpleNamespace(GMAIL_RETRY_BACKOFF_INITIAL_SECONDS=0.001, GMAIL_NOTIFICATION_POLL_SECONDS=0.001),
+        SimpleNamespace(
+            GMAIL_RETRY_BACKOFF_INITIAL_SECONDS=0.001,
+            GMAIL_NOTIFICATION_POLL_SECONDS=0.001,
+            RETENTION_CLEANUP_INTERVAL_SECONDS=3600,
+        ),
     )
 
     await mail_notifications.run_notification_worker(stop_event, uuid4())
