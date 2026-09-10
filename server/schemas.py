@@ -22,10 +22,15 @@ class EmailListItem(BaseModel):
 
 
 class EmailDetail(EmailListItem):
-    """Complete data returned when a single email is opened."""
+    """Complete mail detail with plain text and optional sanitized HTML.
+
+    ``body`` is always text. Clients may render ``sanitized_html`` only when
+    they intentionally opt into the strict server-side sanitization policy.
+    """
 
     cc: List[str] = Field(default_factory=list)
     body: str
+    sanitized_html: Optional[str] = None
 
 
 class EmailDraft(BaseModel):

@@ -70,6 +70,9 @@ class RedisAdapter:
             return 0
         return await self._run(self.client.delete(*keys))
 
+    async def incr(self, key: str) -> int:
+        return int(await self._run(self.client.incr(key)))
+
     async def consume(self, script: str, key: str) -> str | None:
         return await self._run(self.client.eval(script, 1, key))
 

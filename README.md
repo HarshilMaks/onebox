@@ -357,3 +357,15 @@ and Pub/Sub envelopes at `PUBSUB_MAX_ENVELOPE_BYTES` (65,536 bytes by default).
 Recipient lists, subjects, bodies, page tokens, and provider IDs are also bounded.
 Enforce request-rate limits at the authenticated deployment gateway/ingress; the
 application does not implement a second, divergent in-process rate limiter.
+
+
+### Mail content cache policy
+
+Mail detail bodies are cached for **5 minutes**; paginated folders and search
+pages are cached for **60 seconds**. Cache entries are JSON-only and fail open:
+a Redis outage or corrupt value is treated as a cache miss and does not prevent a
+Gmail request. Each mail mutation atomically advances that user's cache
+generation instead of scanning wildcard keys. Older-generation entries may
+remain in Redis only until their normal TTL expires, but cannot be selected by
+new requests after a successful generation advance. The cache is not a durable
+mail-retention store.

@@ -1,84 +1,27 @@
 # utils.py
-import logging
 import base64
+import logging
 import email.utils
+import pytz
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
 from typing import List, Dict, Any, Mapping, Optional
 
-import pytz
-from dateutil import parser
+from server.mail.mime import extract_mail_content, parse_message_date
 
 logger = logging.getLogger(__name__)
 
 def extract_message_body(msg_payload: Dict[str, Any]) -> str:
-    """
-    Recursively walks through email parts to find and decode the message body.
-    Prefers plain text over HTML.
-    """
-    body = "No message body available."
-    if not msg_payload:
-        return body
-
-    mime_type = msg_payload.get("mimeType", "")
-
-    # Check current level body
-    if mime_type == "text/plain":
-        data = msg_payload.get("body", {}).get("data")
-        if data:
-            try:
-                decoded_body = base64.urlsafe_b64decode(data).decode("utf-8")
-                return decoded_body # Prioritize plain text
-            except Exception as e:
-                logger.warning(f"Could not decode base64 plain text body: {e}")
-    elif mime_type == "text/html":
-        data = msg_payload.get("body", {}).get("data")
-        if data:
-            try:
-                # Keep HTML as fallback if plain text isn't found later
-                body = base64.urlsafe_b64decode(data).decode("utf-8")
-            except Exception as e:
-                logger.warning(f"Could not decode base64 html body: {e}")
-
-    # Recurse if parts exist
-    if "parts" in msg_payload:
-        plain_body_found = None
-        html_body_found = None
-        for part in msg_payload.get("parts", []):
-            part_body = extract_message_body(part) # Recursive call
-            part_mime_type = part.get("mimeType", "")
-
-            if part_mime_type == "text/plain" and part_body != "No message body available.":
-                plain_body_found = part_body
-                break # Found plain text in parts, prioritize this
-            elif part_mime_type == "text/html" and part_body != "No message body available.":
-                html_body_found = part_body # Keep track of HTML as fallback
-
-        if plain_body_found:
-            return plain_body_found
-        elif html_body_found:
-            return html_body_found # Use HTML from parts if no plain text found
-
-    # Return body found at the current level (HTML) or default if nothing found
-    return body
+    """Return the bounded plain-text representation of an untrusted MIME payload."""
+    return extract_mail_content(msg_payload).body
 
 
 def parse_email_time(date_header: str) -> Optional[datetime]:
-    """Parses the 'Date' header string into a timezone-aware datetime object."""
+    """Parse a mail date with a timezone-aware UTC fallback."""
     if not date_header:
         return None
-    try:
-        # Use dateutil.parser for robust parsing
-        parsed_dt = parser.parse(date_header)
-        # Ensure it's timezone-aware (if not, assume UTC as a fallback)
-        if parsed_dt.tzinfo is None or parsed_dt.tzinfo.utcoffset(parsed_dt) is None:
-             logger.debug(f"Parsed datetime '{date_header}' lacks timezone info. Assuming UTC.")
-             return parsed_dt.replace(tzinfo=pytz.utc)
-        return parsed_dt
-    except (ValueError, TypeError, OverflowError) as e:
-        logger.error(f"Error parsing time string '{date_header}': {e}")
-        return None
+    return datetime.fromisoformat(parse_message_date(date_header))
 
 def create_raw_message(
     sender: str,
