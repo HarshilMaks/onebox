@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from agents import ExecutiveAgent
+from server.agent_policy import AUTOMATED_INBOUND_POLICY
 from server.config import settings
 from server.database import AsyncSessionLocal
 from server.integrations.google import GoogleOperationRejected, GoogleProviderError, execute_google_request
@@ -199,7 +200,7 @@ async def _triage_message(
             input_query=input_text,
             gmail_service=service,
             current_user_email=mailbox_email,
-            allow_tools=False,
+            policy=AUTOMATED_INBOUND_POLICY,
         )
         await finalize_triage_work(claim, state="succeeded", summary=response)
         return True

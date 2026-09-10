@@ -369,3 +369,22 @@ generation instead of scanning wildcard keys. Older-generation entries may
 remain in Redis only until their normal TTL expires, but cannot be selected by
 new requests after a successful generation advance. The cache is not a durable
 mail-retention store.
+
+
+### Agent execution policy
+
+Agent tool access is a server-owned per-run allowlist, not a prompt capability.
+Automated inbound Gmail triage exposes **zero tools**. Interactive executive and
+streaming runs can use only the tools authorized by their authenticated route and
+available connected account services, and accept at most one primary mutation per
+request. Agent email sends/replies, calendar events, and task creation always
+create typed pending actions for explicit approval; they never perform live
+provider writes directly. Draft creation and marking a message read are the two
+intentional immediate **interactive-only** mutations and are unavailable to
+inbound automation. Direct `/mail/send` and deletion endpoints are separate API
+operations and are not part of the agent tool registry.
+
+Agent prompts render current time per invocation using an IANA `ZoneInfo`
+timezone from the deployment profile. SSE agent streams are nonblocking,
+disconnect-cancellable, deadline/queue-bounded, emit heartbeat comment frames,
+and finish with exactly one `done` or `error` event; they do not support replay.

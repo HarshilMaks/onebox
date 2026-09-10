@@ -23,6 +23,7 @@ from server.integrations.llm import (
     LlmOperationTimeout,
     LlmOperationUnavailable,
 )
+from server.agent_policy import INTERACTIVE_EXECUTIVE_POLICY, INTERACTIVE_STREAM_POLICY
 from server.config import settings
 from server.services.pending_actions import (
     PendingActionInvalidState,
@@ -210,6 +211,7 @@ async def invoke_executive_agent_endpoint(
             calendar_service=calendar_service,
             tasks_service=tasks_service,
             current_user_email=google_connection.google_email,
+            policy=INTERACTIVE_EXECUTIVE_POLICY,
         )
         return {"result": result}
     except HTTPException:
@@ -280,13 +282,15 @@ async def invoke_general_agent_stream_endpoint(
             iterator = agent.run(
                 input_query=query.input,
                 current_user_email=user_email,
+                policy=INTERACTIVE_STREAM_POLICY,
             ).__aiter__()
             terminal_sent = False
             next_event: asyncio.Task | None = None
+            heartbeat_seconds = min(5.0, settings.LLM_STREAM_IDLE_TIMEOUT_SECONDS)
             try:
                 next_event = asyncio.create_task(anext(iterator))
                 while True:
-                    done, _ = await asyncio.wait({next_event}, timeout=15)
+                    done, _ = await asyncio.wait({next_event}, timeout=heartbeat_seconds)
                     if not done:
                         if await request.is_disconnected():
                             return
@@ -302,17 +306,19 @@ async def invoke_general_agent_stream_endpoint(
                     if await request.is_disconnected():
                         return
                     yield _format_stream_event(event_type, content, error_code)
-                    if event_type == "error":
+                    if event_type in {"done", "error"}:
                         terminal_sent = True
                         return
 
                 if not terminal_sent and not await request.is_disconnected():
+                    terminal_sent = True
                     yield _format_stream_event("done", "")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Error while streaming agent response for user %s", user_info.get("user_id"))
-                if not await request.is_disconnected():
+                if not terminal_sent and not await request.is_disconnected():
+                    terminal_sent = True
                     yield _format_stream_event(
                         "error",
                         "The agent stream failed unexpectedly.",

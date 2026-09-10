@@ -1,9 +1,9 @@
 import asyncio
 import logging
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import pytz
 from googleapiclient.discovery import Resource
 from server.integrations.google import GoogleProviderError, execute_google_request
 from server.services.pending_actions import (
@@ -189,14 +189,14 @@ async def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
 async def get_calendar_events(
     calendar_service: Resource,
     date_strs: List[str],
-    target_timezone: str = "Asia/Kolkata",
+    target_timezone: str = "UTC",
 ) -> Dict[str, str]:
     if not calendar_service:
         return {date_str: "Calendar service unavailable" for date_str in date_strs}
 
     try:
-        tz = pytz.timezone(target_timezone)
-    except Exception:
+        tz = ZoneInfo(target_timezone)
+    except ZoneInfoNotFoundError:
         return {date_str: "Invalid timezone" for date_str in date_strs}
 
     results: Dict[str, str] = {}
@@ -207,12 +207,12 @@ async def get_calendar_events(
             results[date_str] = "Invalid date format. Use 'dd-mm-yyyy'."
             continue
 
-        start_local = tz.localize(datetime.combine(day, datetime_time.min))
-        end_local = tz.localize(datetime.combine(day, datetime_time.max))
+        start_local = datetime.combine(day, datetime_time.min, tzinfo=tz)
+        end_local = datetime.combine(day, datetime_time.max, tzinfo=tz)
         request = calendar_service.events().list(
             calendarId="primary",
-            timeMin=start_local.astimezone(pytz.utc).isoformat(),
-            timeMax=end_local.astimezone(pytz.utc).isoformat(),
+            timeMin=start_local.astimezone(timezone.utc).isoformat(),
+            timeMax=end_local.astimezone(timezone.utc).isoformat(),
             singleEvents=True,
             orderBy="startTime",
         )
