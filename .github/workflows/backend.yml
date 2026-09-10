@@ -13,6 +13,20 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_DB: onebox
+          POSTGRES_USER: onebox
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onebox -d onebox"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       ENVIRONMENT: test
       PYTHONPATH: ${{ github.workspace }}
@@ -31,6 +45,11 @@ jobs:
       GOOGLE_LOCATION: us-central1
       GOOGLE_MODEL: gemini-test-model
       CORS_ALLOWED_ORIGINS: http://localhost:3000
+      POSTGRES_PASSWORD: test-password
+      GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH: /tmp/onebox-oauth-client.json
+      GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH: /tmp/onebox-service-account.json
+      OAUTH_TOKEN_KEYRING_HOST_PATH: /tmp/onebox-oauth-keyring.json
+      OAUTH_TOKEN_ACTIVE_KEY_ID: test-key-id
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,12 +69,22 @@ jobs:
           pip-compile --allow-unsafe --dry-run requirements-dev.in
       - name: Lint
         run: ruff check .
+      - name: Verify generated OpenAPI contract
+        run: python scripts/generate_openapi.py --check
+      - name: Compile application
+        run: python -m compileall server tools clients agents.py scripts/generate_openapi.py
+      - name: Apply migrations and detect model drift
+        run: |
+          alembic upgrade head
+          alembic check
       - name: Test
         run: pytest -q
       - name: Check migration graph
         run: |
           alembic heads
           alembic history --verbose
+      - name: Render Compose topology
+        run: docker compose config -q
 
   image:
     runs-on: ubuntu-24.04

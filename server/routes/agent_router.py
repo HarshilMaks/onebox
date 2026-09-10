@@ -266,7 +266,22 @@ def _format_stream_event(
     return f"data: {json.dumps(payload)}\n\n"
 
 
-@router.post("/generate-stream/")
+@router.post(
+    "/generate-stream/",
+    response_model=AgentStreamEvent,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "A text/event-stream response. Each non-comment data frame is JSON matching AgentStreamEvent.",
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string", "format": "event-stream"},
+                    "example": 'data: {"event":"token","content":"Hello"}\\n\\n',
+                }
+            },
+        }
+    },
+)
 async def invoke_general_agent_stream_endpoint(
     query: AgentQuery,
     request: Request,

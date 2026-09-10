@@ -8,6 +8,8 @@ x-runtime-environment: &runtime-environment
   GOOGLE_OAUTH_CLIENT_SECRETS: /run/secrets/onebox_oauth.json
   OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://localhost:8000/agent/oauth/callback}
   FRONTEND_OAUTH_CALLBACK_URI: ${FRONTEND_OAUTH_CALLBACK_URI:-http://localhost:3000/mail/inbox}
+  OAUTH_TOKEN_KEYRING_PATH: /run/secrets/onebox-oauth-token-keyring.json
+  OAUTH_TOKEN_ACTIVE_KEY_ID: ${OAUTH_TOKEN_ACTIVE_KEY_ID:?Set OAUTH_TOKEN_ACTIVE_KEY_ID in your local environment}
   GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID:?Set GOOGLE_PROJECT_ID in your local environment}
   GOOGLE_LOCATION: ${GOOGLE_LOCATION:-us-central1}
   GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-2.0-flash-lite}
@@ -25,6 +27,7 @@ x-automation-environment: &automation-environment
 x-runtime-volumes: &runtime-volumes
   - ${GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH:?Set GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH}:/run/secrets/onebox_oauth.json:ro
   - ${GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH:?Set GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH}:/run/secrets/executive-agent.json:ro
+  - ${OAUTH_TOKEN_KEYRING_HOST_PATH:?Set OAUTH_TOKEN_KEYRING_HOST_PATH}:/run/secrets/onebox-oauth-token-keyring.json:ro
 
 services:
   postgres:

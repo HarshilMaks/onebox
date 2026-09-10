@@ -15,15 +15,15 @@
 
 Managing high-volume executive communication, meeting coordination, and task tracking requires constant context switching.
 
-**OneBox** operates as an autonomous digital assistant directly integrated with Google Workspace accounts (Gmail, Google Calendar, Google Tasks). Powered by Google Gemini models with structured function calling, OneBox listens for incoming mail via real-time Google Cloud Pub/Sub push notifications, triages messages against user preferences, prepares contextual draft replies, and schedules calendar events. For destructive or sensitive actions, OneBox implements a secure human-in-the-loop pending actions workflow.
+**OneBox** is an interactive assistant integrated with Google Workspace accounts (Gmail, Google Calendar, and Google Tasks). Gemini function calling can prepare narrowly authorized interactive actions. Optional Gmail automation durably receives and analyzes Pub/Sub notifications for one configured mailbox; it does not autonomously change mail, draft or send replies, create events/tasks, or synchronize them. Sensitive agent effects use a human-in-the-loop pending-action workflow.
 
 ---
 
 ## Features
 
-- **Automated Mail Triaging:** Evaluates incoming emails against customizable rules, automatically marking promotional or no-reply emails as read while escalating actionable threads.
-- **Calendar & Meet Scheduling:** Parses natural language time requests, checks existing calendar availability, creates Google Calendar events, and generates Google Meet conference links.
-- **Task Synchronization:** Automatically creates and updates follow-up action items in Google Tasks tied to scheduled events and commitments.
+- **Durable Mail Triage:** Receives and analyzes authenticated Pub/Sub notifications for one configured mailbox with PostgreSQL leases, history recovery, and watch renewal. Automated triage does not alter messages or send mail.
+- **Calendar Planning:** Interactive agents can inspect calendar availability and stage a calendar-event action for explicit approval; event creation is never automatic.
+- **Task Planning:** Interactive agents can stage a Google Tasks creation action for explicit approval. OneBox does not automatically synchronize calendar events and tasks.
 - **Human-in-the-Loop Safeguards:** Stages sensitive operations (such as sending live emails or updating calendar events) as immutable pending actions awaiting explicit user approval.
 - **Real-Time Pub/Sub Ingestion:** Receives real-time mailbox push notifications via authenticated Google Cloud Pub/Sub webhooks.
 - **Multi-Tenant OAuth Management:** Handles Google OAuth 2.0 authorization with automatic token persistence, background token refresh, and JWT-authenticated session management.
@@ -63,7 +63,7 @@ OneBox follows a modular, layered architecture separating HTTP routes, agent exe
 - **API Layer (`server/routes/`):** FastAPI routers managing authentication, email operations, agent invocation, and pending action approvals.
 - **Agent Orchestrator (`agents.py`):** Multi-turn Gemini agent dynamically binding authorized Google Workspace tool callables via `functools.partial`.
 - **Tool Suite (`tools/`):** Isolated integrations for Gmail, Google Calendar, and Google Tasks.
-- **Data & State (`server/models.py`, `server/redis_cache.py`):** PostgreSQL database storing encrypted OAuth tokens and pending action states, supplemented by Redis for payload caching.
+- **Data & State (`server/models.py`, `server/redis_cache.py`):** PostgreSQL stores OAuth connection state, pending-action state, and durable notification jobs; Redis provides best-effort cache/state support. See the runbook for credential-migration caveats.
 
 ---
 
@@ -81,7 +81,7 @@ OneBox follows a modular, layered architecture separating HTTP routes, agent exe
 
 ### Required Google Credentials
 
-Create or place these files in the project root:
+The owner supplies these through read-only local or secret-manager mounts; never commit them or add them to a container image:
 
 | File | Description |
 |------|-------------|
@@ -149,31 +149,42 @@ The server will start at `http://0.0.0.0:8000`.
 
 ## Configuration
 
-The application is configured through environment variables in `.env`:
+The typed settings loader rejects unknown names and resolves relative credential
+paths from the repository root. `.env.example` is the complete commented
+reference; `docs/OPERATIONS.md#configuration-contract` explains production
+mounting and operational consequences. Use placeholders and secret-manager
+mounts only, never real values in tracked files.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | - | Async PostgreSQL connection string (`postgresql+asyncpg://...`) |
-| `SECRET_KEY` | Yes | - | Secret key used to sign and verify JWT tokens (`openssl rand -hex 32`) |
-| `ALGORITHM` | No | `HS256` | JWT signing algorithm |
-| `GOOGLE_OAUTH_CLIENT_SECRETS` | No | `onebox_oauth.json` | Path to Google OAuth client secrets file |
-| `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback endpoint (e.g. `https://api.example.com/agent/oauth/callback`) |
-| `FRONTEND_OAUTH_CALLBACK_URI` | Yes | - | Frontend URI redirected to after successful OAuth exchange |
-| `PUBSUB_TOPIC` | Yes | - | Full Google Cloud Pub/Sub topic string for mailbox notifications |
-| `PUBSUB_SUBSCRIPTION` | Yes | - | Google Cloud Pub/Sub subscription string |
-| `GOOGLE_APPLICATION_CREDENTIALS` | No | `executive-agent.json` | Path to Google service account credentials file |
-| `PUBSUB_PUSH_AUDIENCE` | No | `""` | Target audience URL configured on the Pub/Sub push subscription |
-| `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` | No | `""` | Service account email authorized to deliver push notifications |
-| `CORS_ALLOWED_ORIGINS` | No | `""` | Comma-separated list of permitted frontend browser origins |
+| Role or feature | Required settings |
+| --- | --- |
+| Every process | `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL` |
+| OAuth credential operations | `OAUTH_TOKEN_KEYRING_PATH` and `OAUTH_TOKEN_ACTIVE_KEY_ID`; the application fails closed without both. |
+| `automation_worker` / local `combined` | `AUTOMATION_ENABLED=true`, `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` |
+| Pending-action reconciliation | `PENDING_ACTION_OPERATOR_IDS` with authorized authenticated user UUIDs |
+| Production transport | PostgreSQL TLS and authenticated `rediss://`, unless a controlled private network explicitly sets `REDIS_TRUSTED_LOCAL_NETWORK=true` |
+| Compose only | `POSTGRES_PASSWORD`, read-only OAuth/service-account/keyring host paths, and `OAUTH_TOKEN_ACTIVE_KEY_ID` |
 
-> [!IMPORTANT]
-> The Pub/Sub push endpoint `/mail/notifications` validates Google OIDC identity tokens when `PUBSUB_PUSH_AUDIENCE` and `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` are configured. Ensure these match your GCP Pub/Sub push subscription settings.
+Production supports `api` and `automation_worker`; `combined` is a local-only
+convenience role. Automation is disabled by default and supports one configured
+mailbox. See the runbook before enabling it.
 
 ---
 
 ## API Reference
 
 All protected endpoints require an `Authorization: Bearer <JWT_TOKEN>` header.
+The generated, backend-owned contract is [`docs/openapi.json`](docs/openapi.json);
+run `scripts/generate_openapi.py --check` to detect drift. Agent streaming is
+`text/event-stream`, with one JSON payload per non-comment SSE frame.
+
+### Action boundary
+
+Direct authenticated `/mail` send, delete, draft, and mailbox-mutation endpoints
+are human API operations; they are not agent tools. Agent sends/replies,
+calendar-event creation, and task creation create pending actions and require
+explicit approval. Successful external effects report `succeeded`; ambiguous
+writes remain `reconciliation_required` for an authorized operator rather than
+being blindly retried.
 
 ### 1. Health, Liveness, and Readiness
 
@@ -230,7 +241,7 @@ Authorization: Bearer <JWT_TOKEN>
 {
   "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   "action_type": "send_email",
-  "status": "completed",
+  "status": "succeeded",
   "summary": "Send email to sarah@example.com regarding Sprint Goals",
   "result": {
     "message_id": "18f67bc82a1"
@@ -271,19 +282,22 @@ Authorization: Bearer <JWT_TOKEN>
 
 ## Docker Deployment
 
-The supplied Compose topology starts three application roles in order: a one-shot
-migration service, the FastAPI API service, and a dedicated durable Gmail worker.
+The supplied Compose topology starts a one-shot migration service, the FastAPI
+`api` service, and one dedicated durable Gmail `automation_worker` for the
+single configured automation mailbox.
 The API owns authenticated Pub/Sub ingress; the worker runs
 `python -m server.workers`, renews the Gmail watch, and claims PostgreSQL jobs.
 
 Set the normal application settings plus these Compose-only mount paths before
-starting it. The credential files remain on the host and are mounted read-only;
-they are not baked into the image:
+starting it. Credential files and the OAuth token keyring remain on the host and
+are mounted read-only; they are not baked into the image:
 
 ```bash
 export GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH="$PWD/onebox_oauth.json"
 export GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH="$PWD/executive-agent.json"
-export AUTOMATION_OWNER_ID='00000000-0000-0000-0000-000000000000'
+export OAUTH_TOKEN_KEYRING_HOST_PATH="$PWD/onebox-oauth-token-keyring.json"
+export OAUTH_TOKEN_ACTIVE_KEY_ID='<active-key-id>'
+export AUTOMATION_OWNER_ID='<automation-user-uuid>'
 export PUBSUB_TOPIC='projects/PROJECT/topics/gmail-notifications'
 export PUBSUB_SUBSCRIPTION='projects/PROJECT/subscriptions/gmail-notifications'
 export PUBSUB_PUSH_AUDIENCE='https://api.example.com/mail/notifications'
@@ -304,6 +318,11 @@ If bounded history recovery reaches `GMAIL_RESYNC_MAX_MESSAGES`, automation
 enters `manual_required` and deliberately does not advance its Gmail cursor. This
 prevents silently skipping mail; investigate the safe status endpoint and recover
 under an explicit operator procedure before resuming automation.
+
+For migration, readiness, watch renewal, manual recovery, pending-action
+reconciliation, and rollback procedures, follow
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md). Do not issue Gmail `users.stop` as
+part of a normal deployment or rollback.
 
 To view application logs or stop the stack:
 

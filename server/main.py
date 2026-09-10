@@ -62,6 +62,12 @@ app = FastAPI(
     title="Hexel Onebox Server",
     lifespan=lifespan,
     debug=False,
+    responses={
+        422: {
+            "model": PublicErrorResponse,
+            "description": "Request validation failed; the error and detail fields are safe for clients to display.",
+        }
+    },
 )
 
 _STATUS_ERROR_CODES = {

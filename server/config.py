@@ -140,9 +140,11 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URI: str
     FRONTEND_OAUTH_CALLBACK_URI: str
 
-    # Per-user OAuth tokens are encrypted with the active key from this
-    # read-only JSON keyring. Leave both unset only when no credential operation
-    # is enabled; OAuth connection/refresh requests then fail closed.
+    # New and refreshed OAuth credential writes use the active key from this
+    # read-only JSON keyring. Legacy dual-read rows can remain until a later
+    # plaintext-column contraction migration completes. Leave both settings
+    # unset only when no credential operation is enabled; OAuth connection and
+    # refresh requests then fail closed.
     OAUTH_TOKEN_KEYRING_PATH: Path | None = None
     OAUTH_TOKEN_ACTIVE_KEY_ID: str | None = None
 

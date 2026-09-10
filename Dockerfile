@@ -35,4 +35,4 @@ COPY --chown=onebox:onebox agents.py alembic.ini user_config.yaml ./
 USER 10001:10001
 EXPOSE 8000
 
-CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "server/logging.ini"]
+CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000"]
