@@ -1,190 +1,227 @@
 # OneBox
 
-> Intelligent AI agent orchestration platform for automated email triage, calendar scheduling, and task management using Gemini and Google Workspace APIs.
+> Production-grade asynchronous AI agent orchestration platform integrating Google Workspace (Gmail, Calendar, Tasks) with Gemini models, durable Pub/Sub workers, and human-in-the-loop action governance.
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
+[![Contract](https://img.shields.io/badge/OpenAPI-v3.1.0-green.svg)](docs/openapi.json)
 
-[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Prerequisites](#prerequisites) • [Quick Start](#quick-start) • [Configuration](#configuration) • [API Reference](#api-reference) • [Docker](#docker) • [Project Structure](#project-structure)
+[Overview](#overview) • [Features](#features) • [Architecture & Roles](#architecture--service-roles) • [Prerequisites](#prerequisites) • [Quick Start](#quick-start) • [Configuration](#configuration-reference) • [API & Event Streams](#api--event-stream-reference) • [Operational Policies](#operational--security-policies) • [Docker Deployment](#docker-deployment) • [Testing & Verification](#testing--release-gates) • [Project Structure](#project-structure)
 
 ---
 
 ## Overview
 
-Managing high-volume executive communication, meeting coordination, and task tracking requires constant context switching.
+Managing high-volume executive communication, meeting scheduling, and task coordination requires continuous context switching and carries high operational risk if automated blindly.
 
-**OneBox** is an interactive assistant integrated with Google Workspace accounts (Gmail, Google Calendar, and Google Tasks). Gemini function calling can prepare narrowly authorized interactive actions. Optional Gmail automation durably receives and analyzes Pub/Sub notifications for one configured mailbox; it does not autonomously change mail, draft or send replies, create events/tasks, or synchronize them. Sensitive agent effects use a human-in-the-loop pending-action workflow.
+**OneBox** provides a resilient, secure foundation for AI-assisted executive operations. It pairs Google Gemini models with Google Workspace APIs (Gmail, Google Calendar, Google Tasks) while enforcing strict operational boundaries:
+
+1. **Interactive Agent Planning:** Users engage with executive and streaming agents to inspect schedules, search messages, and compose plans. Any mutation with an external side effect (sending an email, creating a calendar event, adding a task) is staged as an immutable, typed **pending action** requiring explicit user approval.
+2. **Durable Inbound Automation:** An asynchronous background worker receives authenticated Google Cloud Pub/Sub push notifications for a configured mailbox, acquiring singleton PostgreSQL leases and recovering message history safely. Inbound automation operates with **zero tool permissions**—it analyzes incoming messages according to user triage rules without autonomously modifying mail or issuing writes.
+3. **Enterprise Resilience & Governance:** Built with encrypted OAuth token keyrings, classified provider retry policies, generational Redis caching, and operator reconciliation workflows for uncertain provider writes.
 
 ---
 
 ## Features
 
-- **Durable Mail Triage:** Receives and analyzes authenticated Pub/Sub notifications for one configured mailbox with PostgreSQL leases, history recovery, and watch renewal. Automated triage does not alter messages or send mail.
-- **Calendar Planning:** Interactive agents can inspect calendar availability and stage a calendar-event action for explicit approval; event creation is never automatic.
-- **Task Planning:** Interactive agents can stage a Google Tasks creation action for explicit approval. OneBox does not automatically synchronize calendar events and tasks.
-- **Human-in-the-Loop Safeguards:** Stages sensitive operations (such as sending live emails or updating calendar events) as immutable pending actions awaiting explicit user approval.
-- **Real-Time Pub/Sub Ingestion:** Receives real-time mailbox push notifications via authenticated Google Cloud Pub/Sub webhooks.
-- **Multi-Tenant OAuth Management:** Handles Google OAuth 2.0 authorization with automatic token persistence, background token refresh, and JWT-authenticated session management.
-- **High-Performance Caching:** Redis caching layer for paginated mailbox listings and message bodies to minimize external Google API latency and quota consumption.
+- **Human-in-the-Loop Safeguards:** External mutations (email sends/replies, calendar events, tasks) are staged as immutable pending actions in PostgreSQL; no destructive effect executes without explicit authorization (`POST /actions/{action_id}/approve`).
+- **Durable Gmail Pub/Sub Worker:** Scalable background notification daemon with PostgreSQL row-level locks, bounded lease recovery, automatic watch renewal, and safe history resynchronization.
+- **Strict Separation of Concerns:** Inbound automated triage is decoupled from interactive agent execution. Automated triage has zero tools, preventing unauthorized automated replies or state changes.
+- **Encrypted OAuth Keyring:** User tokens are protected at rest with AES-256-GCM using an active key ID from a mounted, read-only JSON keyring (`OAUTH_TOKEN_KEYRING_PATH`).
+- **Classified Provider Retries:** Google API requests are categorized into permanent, authentication, quota, retryable transport/read, and ambiguous write. Ambiguous writes are dispatched once and never blind-retried.
+- **Operator Reconciliation Workflow:** Ambiguous external writes enter a `reconciliation_required` state, allowing authorized operators to inspect deterministic provider markers and resolve state safely.
+- **Generational Caching:** Redis caching for mail details (5-minute TTL) and folder/search pages (60-second TTL) using atomic per-user generation keys to invalidate stale data without wildcard key scans.
+- **Multi-Role Process Topology:** First-class support for separate `api`, `automation_worker`, `migrate`, and local `combined` service roles.
+- **Migration-Aware Health Checks:** Dedicated dependency-free `/livez` endpoint alongside `/readyz` that verifies schema migration heads and Redis connectivity without making external Google calls.
 
 ---
 
-## Architecture
+## Architecture & Service Roles
 
-OneBox follows a modular, layered architecture separating HTTP routes, agent execution loops, tool adapters, and persistence layers:
+OneBox isolates API ingress, durable background processing, database migrations, and external provider integrations into distinct, single-responsibility components:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      FastAPI Server                         │
-│  (/mail, /executive, /generate-stream, /actions, /agent)    │
-└──────────────┬───────────────────────────────┬──────────────┘
-               │                               │
-        OAuth & User Auth             Pub/Sub Webhooks
-               │                               │
-┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-│  SQLAlchemy & PostgreSQL    │ │     Background Worker       │
-│  (Tokens & Pending Actions) │ │ (notification triage worker) │
-└─────────────────────────────┘ └──────────────┬──────────────┘
-                                               │
-                                ┌──────────────▼──────────────┐
-                                │      Executive Agent        │
-                                │   (Gemini Function Call)    │
-                                └──────────────┬──────────────┘
-                                               │
-                   ┌───────────────────────────┼───────────────────────────┐
-                   ▼                           ▼                           ▼
-         ┌───────────────────┐       ┌───────────────────┐       ┌───────────────────┐
-         │     Gmail API     │       │   Calendar API    │       │     Tasks API     │
-         └───────────────────┘       └───────────────────┘       └───────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            FastAPI Application                              │
+│         (/mail, /executive, /generate-stream, /actions, /agent, /readyz)    │
+└──────────────────────┬───────────────────────────────┬──────────────────────┘
+                       │                               │
+                User JWT & OAuth              Pub/Sub Push Ingress
+                       │                               │
+        ┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
+        │   PostgreSQL 16 (Async)     │ │   PostgreSQL Job Queue      │
+        │ (Tokens, Actions, Audits)   │ │ (Durable Leases & Backoff)  │
+        └──────────────┬──────────────┘ └──────────────┬──────────────┘
+                       │                               │
+                       │                        Worker Singleton Lease
+                       │                               │
+        ┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
+        │       Interactive Agent     │ │   Durable Worker Daemon     │
+        │   (Gemini + Staged Tools)   │ │   (mail_notifications.py)   │
+        └──────────────┬──────────────┘ └──────────────┬──────────────┘
+                       │                               │
+                       │ Staged Pending Actions        │ Read-Only Triage
+                       │ (Explicit User Approval)      │ (Zero Tools Allowed)
+                       ▼                               ▼
+        ┌─────────────────────────────────────────────────────────────┐
+        │             Google Workspace APIs & Adapters                │
+        │            (Gmail API, Calendar API, Tasks API)             │
+        └─────────────────────────────────────────────────────────────┘
 ```
 
-- **API Layer (`server/routes/`):** FastAPI routers managing authentication, email operations, agent invocation, and pending action approvals.
-- **Agent Orchestrator (`agents.py`):** Multi-turn Gemini agent dynamically binding authorized Google Workspace tool callables via `functools.partial`.
-- **Tool Suite (`tools/`):** Isolated integrations for Gmail, Google Calendar, and Google Tasks.
-- **Data & State (`server/models.py`, `server/redis_cache.py`):** PostgreSQL stores OAuth connection state, pending-action state, and durable notification jobs; Redis provides best-effort cache/state support. See the runbook for credential-migration caveats.
+### Supported Process Roles
+
+| Role | Target Command | Primary Responsibilities |
+| --- | --- | --- |
+| `api` | `uvicorn server.main:app` | Serves REST/SSE routes, authenticates user JWTs, handles OAuth flows, accepts Pub/Sub webhook pushes, and manages pending action approvals. |
+| `automation_worker` | `python -m server.workers` | Claims pending notification jobs from PostgreSQL, executes inbox triage with zero tools, renews Gmail push watches, and runs retention cleanups. |
+| `combined` | `uvicorn server.main:app` | **Local development only**. Runs API routes and in-process automation worker tasks concurrently. |
+| `migrate` | `alembic upgrade head` | One-shot migration container running schema upgrades prior to API or worker boot. |
 
 ---
 
 ## Prerequisites
 
 - **Python 3.12+**
-- **PostgreSQL 14+**
-- **Docker & Docker Compose** (for running Redis or containerized application)
-- **Google Cloud Platform Project** with the following APIs enabled:
-  - Gmail API
-  - Google Calendar API
-  - Google Tasks API
+- **PostgreSQL 16+** (with `pg_isready` support and TLS in production)
+- **Redis 7+** (`redis://` for development, authenticated `rediss://` for production)
+- **Docker & Docker Compose** (for containerized deployments)
+- **Google Cloud Platform Project** with active APIs:
+  - Gmail API (`gmail.modify`, `mail.google.com`)
+  - Google Calendar API (`calendar`)
+  - Google Tasks API (`tasks`)
   - Cloud Pub/Sub API
   - Vertex AI API / Google GenAI API
 
-### Required Google Credentials
+### Required Secret Files
 
-The owner supplies these through read-only local or secret-manager mounts; never commit them or add them to a container image:
+Mount these files read-only via secret management; never commit them to version control or bake them into container images:
 
-| File | Description |
-|------|-------------|
-| `onebox_oauth.json` | Google OAuth 2.0 Web Client credentials (client ID, client secret, redirect URIs) |
-| `executive-agent.json` | Google Cloud service account key with Pub/Sub and Vertex AI permissions |
+| File | Purpose | Default Host Path |
+| --- | --- | --- |
+| `onebox_oauth.json` | Google OAuth 2.0 Web Client configuration (Client ID & Secret). | `GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH` |
+| `executive-agent.json` | Google Cloud service account credentials with Pub/Sub and Vertex AI roles. | `GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH` |
+| `onebox-oauth-token-keyring.json` | AES-256-GCM JSON keyring mapping key IDs to base64url 32-byte encryption keys. | `OAUTH_TOKEN_KEYRING_HOST_PATH` |
 
 ---
 
 ## Quick Start
 
-### 1. Clone and Set Up Environment
+### 1. Clone Repository & Setup Environment
 
 ```bash
 git clone https://github.com/HarshilMaks/onebox.git
 cd onebox
 
-python3.12 -m venv .venv
-source .venv/bin/activate
-
+# Create virtual environment and install verified pinned dependencies
 make install
+source .venv/bin/activate
 ```
 
-### 2. Configure Environment Variables
+> [!NOTE]
+> `make install` uses `pip install --require-hashes -r requirements-dev.txt` to enforce hash verification across all dependencies.
+
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your PostgreSQL database connection, JWT secret, and Google Cloud parameters.
+Configure `.env` with your PostgreSQL connection, Redis URL, JWT secrets, and Google credentials. For local development, minimum requirements are:
+- `DATABASE_URL=postgresql+asyncpg://onebox:password@localhost:5432/onebox`
+- `REDIS_URL=redis://localhost:6379/0`
+- `SECRET_KEY=<32-byte-hex-secret>`
+- `GOOGLE_PROJECT_ID=<gcp-project-id>`
+- `OAUTH_TOKEN_KEYRING_PATH=./onebox-oauth-token-keyring.json`
+- `OAUTH_TOKEN_ACTIVE_KEY_ID=<key-id>`
 
-### 3. Start Redis
-
-Start Redis using the included helper script:
+### 3. Start Local Redis
 
 ```bash
 bash scripts/redis_setup.sh
 ```
 
-Or run it via Docker directly:
-
-```bash
-docker run -d --name redis -p 6379:6379 redis:latest
-```
-
 ### 4. Run Database Migrations
 
-Apply database migrations using Alembic:
-
 ```bash
-alembic upgrade head
+.venv/bin/alembic upgrade head
 ```
 
-### 5. Start the Server
+### 5. Launch Application Services
+
+To start the API in development mode with hot reload:
 
 ```bash
-make run
+make run-dev
 ```
 
-The server will start at `http://0.0.0.0:8000`.
+To run the background automation worker:
 
-> [!TIP]
-> Swagger UI documentation is available at `http://localhost:8000/docs` and ReDoc at `http://localhost:8000/redoc`.
+```bash
+make run-worker
+```
+
+Interactive OpenAPI documentation is accessible at `http://localhost:8000/docs`.
 
 ---
 
-## Configuration
+## Configuration Reference
 
-The typed settings loader rejects unknown names and resolves relative credential
-paths from the repository root. `.env.example` is the complete commented
-reference; `docs/OPERATIONS.md#configuration-contract` explains production
-mounting and operational consequences. Use placeholders and secret-manager
-mounts only, never real values in tracked files.
+The application uses typed Pydantic settings (`server/config.py`) that fail fast on unknown or malformed configuration keys. Relative paths resolve from the repository root.
 
-| Role or feature | Required settings |
-| --- | --- |
-| Every process | `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL` |
-| OAuth credential operations | `OAUTH_TOKEN_KEYRING_PATH` and `OAUTH_TOKEN_ACTIVE_KEY_ID`; the application fails closed without both. |
-| `automation_worker` / local `combined` | `AUTOMATION_ENABLED=true`, `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` |
-| Pending-action reconciliation | `PENDING_ACTION_OPERATOR_IDS` with authorized authenticated user UUIDs |
-| Production transport | PostgreSQL TLS and authenticated `rediss://`, unless a controlled private network explicitly sets `REDIS_TRUSTED_LOCAL_NETWORK=true` |
-| Compose only | `POSTGRES_PASSWORD`, read-only OAuth/service-account/keyring host paths, and `OAUTH_TOKEN_ACTIVE_KEY_ID` |
+### Core & Role Configuration
 
-Production supports `api` and `automation_worker`; `combined` is a local-only
-convenience role. Automation is disabled by default and supports one configured
-mailbox. See the runbook before enabling it.
+| Setting | Required | Default | Description |
+| --- | --- | --- | --- |
+| `ENVIRONMENT` | No | `development` | Environment mode: `development`, `test`, `staging`, or `production`. |
+| `SERVICE_ROLE` | No | `api` | Process role: `api`, `automation_worker`, or `combined`. |
+| `AUTOMATION_ENABLED` | No | `false` | Enables durable Pub/Sub worker and background triage processing. |
+| `AUTOMATION_OWNER_ID` | If worker | `None` | UUID of the single OneBox user whose mailbox is monitored by automation. |
+| `PENDING_ACTION_OPERATOR_IDS` | No | `""` | Comma-separated list of authenticated user UUIDs authorized to run action reconciliation. |
+
+### Persistence & Transport
+
+| Setting | Required | Default | Description |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | Yes | - | Async PostgreSQL URI (`postgresql+asyncpg://user:pass@host:5432/db`). Requires TLS in production. |
+| `REDIS_URL` | Yes | - | Redis connection URL (`redis://` or `rediss://`). Requires password and TLS in production. |
+| `DATABASE_POOL_SIZE` | No | `5` | Core connection pool size for SQLAlchemy. |
+| `DATABASE_MAX_OVERFLOW` | No | `5` | Maximum overflow connections for SQLAlchemy. |
+| `REDIS_TRUSTED_LOCAL_NETWORK` | No | `false` | Allows unencrypted Redis in production only if operating inside a private VPC. |
+
+### Authentication & Token Security
+
+| Setting | Required | Default | Description |
+| --- | --- | --- | --- |
+| `SECRET_KEY` | Yes | - | Secret key used for HS256 JWT signature verification (minimum 32 bytes). |
+| `JWT_ISSUER` | Yes | - | Expected JWT issuer claim (`iss`). |
+| `JWT_AUDIENCE` | Yes | - | Expected JWT audience claim (`aud`). |
+| `OAUTH_TOKEN_KEYRING_PATH` | If OAuth | `None` | Filepath to the read-only JSON keyring used for AES-256-GCM token encryption. |
+| `OAUTH_TOKEN_ACTIVE_KEY_ID` | If OAuth | `None` | Active key identifier in the keyring for encrypting new/refreshed tokens. |
+| `GOOGLE_OAUTH_CLIENT_SECRETS`| Yes | `onebox_oauth.json` | Path to Google OAuth 2.0 Web Client secrets JSON file. |
+| `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback redirect URI (HTTPS required in production). |
+| `FRONTEND_OAUTH_CALLBACK_URI`| Yes | - | Frontend URL to redirect the user after OAuth completion. |
+
+### Google Cloud & Automation Worker
+
+| Setting | Required | Default | Description |
+| --- | --- | --- | --- |
+| `GOOGLE_PROJECT_ID` | Yes | - | Google Cloud Platform project identifier. |
+| `GOOGLE_LOCATION` | Yes | `us-central1` | Google Cloud region for Vertex AI endpoints. |
+| `GOOGLE_MODEL` | Yes | `gemini-2.0-flash-lite` | Gemini model name used by agent implementations. |
+| `PUBSUB_TOPIC` | If worker | `None` | Full GCP Pub/Sub topic path (`projects/{p}/topics/{t}`). |
+| `PUBSUB_SUBSCRIPTION` | If worker | `None` | Full GCP Pub/Sub subscription path (`projects/{p}/subscriptions/{s}`). |
+| `PUBSUB_PUSH_AUDIENCE` | If worker | `None` | Expected audience in the Google-signed OIDC push authorization token. |
+| `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` | If worker | `None` | Authorized service account email delivering Pub/Sub push requests. |
+| `GMAIL_RESYNC_MAX_MESSAGES` | No | `100` | Maximum messages recovered during history resync before entering `manual_required`. |
 
 ---
 
-## API Reference
+## API & Event Stream Reference
 
-All protected endpoints require an `Authorization: Bearer <JWT_TOKEN>` header.
-The generated, backend-owned contract is [`docs/openapi.json`](docs/openapi.json);
-run `scripts/generate_openapi.py --check` to detect drift. Agent streaming is
-`text/event-stream`, with one JSON payload per non-comment SSE frame.
-
-### Action boundary
-
-Direct authenticated `/mail` send, delete, draft, and mailbox-mutation endpoints
-are human API operations; they are not agent tools. Agent sends/replies,
-calendar-event creation, and task creation create pending actions and require
-explicit approval. Successful external effects report `succeeded`; ambiguous
-writes remain `reconciliation_required` for an authorized operator rather than
-being blindly retried.
+All authenticated endpoints require an `Authorization: Bearer <JWT_TOKEN>` header with matching `JWT_ISSUER` and `JWT_AUDIENCE`. The source of truth for the HTTP API contract is [`docs/openapi.json`](docs/openapi.json).
 
 ### 1. Health, Liveness, and Readiness
 
@@ -192,21 +229,43 @@ being blindly retried.
 GET /livez HTTP/1.1
 Host: localhost:8000
 ```
+Returns `200 OK` if the process is up.
 
-`/livez` reports dependency-free process liveness. `/readyz` returns `503` unless
-PostgreSQL is reachable and migrated to the Alembic head, role-required Redis is
-reachable, and local combined automation has a valid persisted worker state.
+```http
+GET /readyz HTTP/1.1
+Host: localhost:8000
+```
+Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Makes zero external Google calls.
 
-**Liveness response (200 OK):**
+**Readiness Response (200 OK):**
 ```json
 {
-  "status": "ok"
+  "status": "ready",
+  "database": "connected",
+  "migration_head": "e84c0a9b6d21",
+  "redis": "connected"
 }
 ```
 
-### 2. Invoke Executive Agent
+### 2. Gmail Automation Diagnostics
 
-Executes conversational planning or triggers tools (email drafting, calendar scheduling, task creation):
+```http
+GET /mail/agent/health HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+Reports automation health; returns `200 OK` only if a valid unexpired Gmail watch and fresh worker heartbeat exist.
+
+```http
+GET /mail/agent/status HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+Provides safe diagnostic telemetry on queue depths, lease states, and history resync status without exposing message content.
+
+### 3. Interactive Executive Agent
+
+Executes multi-turn Gemini reasoning with strict read-only tool inspection:
 
 ```http
 POST /executive/ HTTP/1.1
@@ -215,20 +274,44 @@ Authorization: Bearer <JWT_TOKEN>
 Content-Type: application/json
 
 {
-  "input": "Schedule a 45-minute sync with sarah@example.com tomorrow at 3pm to review sprint goals"
+  "input": "Schedule a 45-minute sync with sarah@example.com tomorrow at 3pm to review roadmap items"
 }
 ```
 
 **Response (200 OK):**
 ```json
 {
-  "result": "✓ Scheduled 'Sync to review sprint goals' for 15-09-2026 15:00 and added reminder task."
+  "result": "I have verified your availability and staged a calendar event for tomorrow at 3:00 PM. Please review and approve pending action 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d."
 }
 ```
 
-### 3. Approve Pending Action
+### 4. Agent Event Streaming (SSE)
 
-Executes a staged action (such as sending an email or updating an event):
+Streams real-time agent thoughts and structured events via Server-Sent Events (`text/event-stream`):
+
+```http
+POST /generate-stream/ HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+Content-Type: application/json
+
+{
+  "input": "Summarize my unread emails from this morning"
+}
+```
+
+**SSE Stream Output:**
+```
+data: {"event": "status", "content": "Querying inbox..."}
+
+data: {"event": "chunk", "content": "You have 3 unread messages..."}
+
+data: {"event": "done", "content": ""}
+```
+
+### 5. Approve Pending Action
+
+Executes a staged action after user verification:
 
 ```http
 POST /actions/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/approve HTTP/1.1
@@ -240,21 +323,21 @@ Authorization: Bearer <JWT_TOKEN>
 ```json
 {
   "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-  "action_type": "send_email",
+  "action_type": "create_event",
   "status": "succeeded",
-  "summary": "Send email to sarah@example.com regarding Sprint Goals",
+  "summary": "Create Calendar Event: Sync to review roadmap items",
   "result": {
-    "message_id": "18f67bc82a1"
+    "event_id": "c198a28f7e2a9b"
   }
 }
 ```
 
-### 4. Fetch Inbox Emails
+### 6. Reconcile Ambiguous Action
 
-Retrieves paginated emails with inline CID images automatically converted to browser-safe data URIs:
+Authorized operators can investigate and resolve uncertain provider mutations:
 
 ```http
-GET /mail/emails?folder=inbox&limit=10 HTTP/1.1
+POST /actions/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/reconcile HTTP/1.1
 Host: localhost:8000
 Authorization: Bearer <JWT_TOKEN>
 ```
@@ -262,73 +345,118 @@ Authorization: Bearer <JWT_TOKEN>
 **Response (200 OK):**
 ```json
 {
-  "emails": [
-    {
-      "id": "18f67bc82a1",
-      "subject": "Q3 Planning Meeting",
-      "sender": "sarah@example.com",
-      "to": ["user@example.com"],
-      "snippet": "Can we meet tomorrow to discuss roadmap priorities?",
-      "is_read": false,
-      "is_starred": true,
-      "labels": ["INBOX", "UNREAD", "STARRED"]
-    }
-  ],
-  "next_page_token": "0982347102934"
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "status": "succeeded",
+  "reconciliation_evidence": {
+    "discovered_provider_id": "c198a28f7e2a9b",
+    "verified_at": "2026-09-11T19:30:00Z"
+  }
 }
 ```
 
 ---
 
+## Operational & Security Policies
+
+### Ingress & Payload Bounds
+To prevent resource exhaustion and Denial of Service, the API enforces strict input ceilings before dispatching work to external providers:
+- **Agent Prompts:** Capped at 8,000 characters.
+- **Gmail Search Queries:** Capped at 512 characters.
+- **Mail Pagination Limits:** Capped at 100 messages per page.
+- **Pub/Sub Push Envelopes:** Capped at `PUBSUB_MAX_ENVELOPE_BYTES` (64 KB default).
+- **OAuth Callback State & Code:** Capped at 512 and 4,096 characters respectively.
+
+### Generational Mail Cache Policy
+Mail detail bodies are cached for **5 minutes**; folder views and search results are cached for **60 seconds**.
+- **Atomic Generation Invalidation:** Each mail state mutation (marking read, moving to trash, starring) atomically advances the user's cache generation integer.
+- **No Wildcard Scans:** Prevents blocking Redis with dangerous `KEYS *` operations.
+- **Fail-Open Behavior:** A Redis outage or serialization failure is treated as a cache miss and does not block mail fetching.
+
+### Agent Execution & Tool Allowlist
+Tool access is governed by an immutable per-run server allowlist:
+- **Automated Inbound Triage:** Exposes **zero tools**. Inbound automation only records structured triage metadata and never alters provider state.
+- **Interactive Agents:** May only access tools explicitly granted by route configuration and user service connections.
+- **Staged External Effects:** Sends, replies, event creations, and task insertions stage pending actions; they never perform live external writes directly.
+- **Immediate Interactive Tools:** Only `create_draft` and `mark_as_read` execute immediately during interactive sessions.
+
+### Provider Retry, Identity & Retention Policy
+External Google API failures are classified into granular categories:
+- **Safe Retries:** Reads and idempotent writes execute with bounded exponential backoff, jitter, and a provider `Retry-After` floor.
+- **Single Dispatch:** Non-idempotent writes are executed exactly once. Ambiguous results transition to `reconciliation_required`.
+- **Authoritative Identity:** Persisted case-normalized Google email addresses define account ownership. OneBox fails closed if credentials point to a renamed or mismatched account.
+- **Data Retention:** Terminal pending actions are retained for **30 days**; terminal notification jobs and triage logs are retained for **14 days**. Expired rows are purged periodically by the worker.
+
+---
+
 ## Docker Deployment
 
-The supplied Compose topology starts a one-shot migration service, the FastAPI
-`api` service, and one dedicated durable Gmail `automation_worker` for the
-single configured automation mailbox.
-The API owns authenticated Pub/Sub ingress; the worker runs
-`python -m server.workers`, renews the Gmail watch, and claims PostgreSQL jobs.
+OneBox provides a production-grade multi-container topology via `docker-compose.yaml` consisting of `postgres`, `redis`, a one-shot `migrate` service, the FastAPI `app`, and the background `worker`:
 
-Set the normal application settings plus these Compose-only mount paths before
-starting it. Credential files and the OAuth token keyring remain on the host and
-are mounted read-only; they are not baked into the image:
+```bash
+# Verify Compose configuration syntax
+make compose-config
+
+# Launch all services in background
+make compose-up
+```
+
+Credential and keyring files are mounted read-only from the host into `/run/secrets/`:
 
 ```bash
 export GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH="$PWD/onebox_oauth.json"
 export GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH="$PWD/executive-agent.json"
 export OAUTH_TOKEN_KEYRING_HOST_PATH="$PWD/onebox-oauth-token-keyring.json"
-export OAUTH_TOKEN_ACTIVE_KEY_ID='<active-key-id>'
-export AUTOMATION_OWNER_ID='<automation-user-uuid>'
-export PUBSUB_TOPIC='projects/PROJECT/topics/gmail-notifications'
-export PUBSUB_SUBSCRIPTION='projects/PROJECT/subscriptions/gmail-notifications'
-export PUBSUB_PUSH_AUDIENCE='https://api.example.com/mail/notifications'
-export PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL='push@PROJECT.iam.gserviceaccount.com'
-make compose-config
+export OAUTH_TOKEN_ACTIVE_KEY_ID="active-key-id"
+export POSTGRES_PASSWORD="secure-postgres-password"
+export SECRET_KEY="secure-jwt-secret-key"
+export GOOGLE_PROJECT_ID="your-gcp-project-id"
+
 make compose-up
 ```
 
-`make compose-up` waits for PostgreSQL, applies Alembic migrations, then starts
-both the API and worker. The unauthenticated `/livez` route is process liveness only.
-The unauthenticated `/readyz` route verifies PostgreSQL schema readiness and
-role-required Redis without making Google calls. The authenticated
-`/mail/agent/health` route reports Gmail readiness only when a
-valid unexpired watch and a fresh worker heartbeat exist. `/mail/agent/status`
-contains safe queue and recovery diagnostics.
-
-If bounded history recovery reaches `GMAIL_RESYNC_MAX_MESSAGES`, automation
-enters `manual_required` and deliberately does not advance its Gmail cursor. This
-prevents silently skipping mail; investigate the safe status endpoint and recover
-under an explicit operator procedure before resuming automation.
-
-For migration, readiness, watch renewal, manual recovery, pending-action
-reconciliation, and rollback procedures, follow
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md). Do not issue Gmail `users.stop` as
-part of a normal deployment or rollback.
-
-To view application logs or stop the stack:
+To tail logs from the application and worker:
 
 ```bash
 docker compose logs -f app worker
-docker compose down
+```
+
+To gracefully shut down services:
+
+```bash
+make compose-down
+```
+
+> [!IMPORTANT]
+> Detailed procedures for rolling upgrades, safe rollbacks, Gmail watch renewal, and pending-action reconciliation are documented in the [Backend Operations Runbook](docs/OPERATIONS.md).
+
+---
+
+## Testing & Release Gates
+
+All backend changes must pass the automated release gate before deployment:
+
+```bash
+# Execute full suite: Ruff linting, OpenAPI drift check, and Pytest
+make check
+```
+
+Individual developer workflows:
+
+```bash
+# Run Ruff lint checks
+make lint
+
+# Run Pytest unit and integration test suite
+make test
+
+# Regenerate OpenAPI schema contract
+make contract
+
+# Verify OpenAPI schema has not drifted
+make contract-check
+
+# Verify container security: non-root execution and zero secret leaks
+make image-smoke
 ```
 
 ---
@@ -338,94 +466,55 @@ docker compose down
 ```
 onebox/
 ├── server/
-│   ├── agent_policy.py      # Immutable per-run agent authorization policy
-│   ├── agent_tools.py       # Gemini declarations and trusted tool bindings
-│   ├── integrations/        # Google, Gmail, LLM, and Redis adapters
-│   ├── mail/                # MIME parsing and inbound notification triage
-│   ├── routes/              # HTTP endpoints and Pub/Sub ingress
-│   ├── services/            # Mailbox use cases and durable action services
-│   ├── workers/             # Durable Gmail notification worker
-│   ├── models.py            # SQLAlchemy database models
-│   ├── database.py          # Sole metadata base, engine, and session factory
-│   ├── redis_cache.py       # Redis caching utilities
-│   └── main.py              # FastAPI application entrypoint and lifespan
-├── tools/                   # Agent tool implementations
-│   ├── llm_tools.py         # Pending-action and interactive Google tool callables
-│   └── utils.py             # Shared raw-message and header helpers
-├── clients/                 # LLM client abstractions & system prompts
-│   ├── base.py              # Vertex AI & GenAI client setup
-│   └── prompt.py            # Executive & email agent system instructions
-├── alembic/                 # Database migrations
-├── scripts/                 # Utility scripts (e.g., redis_setup.sh)
-├── Dockerfile               # Multi-stage production container image
-├── docker-compose.yaml      # Multi-container orchestration (App + Redis)
-├── Makefile                 # Common developer workflow targets
-└── user_config.yaml         # User profile, triage rules, & preferences
+│   ├── main.py                  # FastAPI application entrypoint & lifespan
+│   ├── config.py                # Typed settings, validation, and role definitions
+│   ├── database.py              # Async SQLAlchemy engine, sessionmaker, and Base
+│   ├── models.py                # Database models (Tokens, Actions, Jobs, Watches)
+│   ├── redis_cache.py           # Generational Redis cache client and utilities
+│   ├── agent_policy.py          # Immutable per-run agent authorization policy
+│   ├── agent_tools.py           # Gemini function declarations & trusted tool bindings
+│   ├── mail/
+│   │   ├── mime.py              # RFC 822 / MIME parsing & CID inline image decoding
+│   │   └── inbound.py           # Inbound notification triage & rule evaluation
+│   ├── integrations/
+│   │   ├── google.py            # Classified Google API retry & backoff wrapper
+│   │   ├── gmail.py             # Gmail resource builders & batch operations
+│   │   └── redis.py             # Redis connection pools and concurrency limits
+│   ├── routes/
+│   │   ├── agent_oauth.py       # Google OAuth 2.0 PKCE / state flows
+│   │   ├── agent_router.py      # Executive/streaming agents & pending action lifecycle
+│   │   ├── google_mail.py       # User mail fetch, search, star, and delete endpoints
+│   │   └── push_router.py       # Authenticated Google Pub/Sub push receiver
+│   ├── services/
+│   │   ├── pending_actions.py   # Pending action staging, claiming, and reconciliation
+│   │   ├── action_handlers.py   # Executable handlers for approved pending actions
+│   │   ├── notification_jobs.py # Durable notification queue storage & leases
+│   │   ├── mailbox.py           # User-facing mailbox fetch and cache services
+│   │   ├── readiness.py         # Migration and persistence health verifiers
+│   │   ├── retention.py         # Terminal record pruning routines
+│   │   └── setup_google.py      # Authenticated Google Workspace service factories
+│   └── workers/
+│       ├── __main__.py          # Worker entrypoint (`python -m server.workers`)
+│       └── mail_notifications.py# Durable Pub/Sub notification worker & watch renewal
+├── tools/
+│   ├── llm_tools.py             # Interactive agent tools & pending action generators
+│   └── utils.py                 # RFC 2822 message encoders and header utilities
+├── clients/
+│   ├── base.py                  # Vertex AI / GenAI client initializers
+│   └── prompt.py                # Executive and email agent system prompts
+├── tests/
+│   ├── unit/                    # Fast isolated unit tests
+│   └── integration/             # Database and notification queue integration tests
+├── docs/
+│   ├── openapi.json             # Generated, backend-owned OpenAPI contract
+│   └── OPERATIONS.md            # Production runbook, watch renewal, and recovery
+├── alembic/                     # Database migrations
+├── scripts/
+│   ├── generate_openapi.py      # Tool to generate/check OpenAPI schema drift
+│   └── redis_setup.sh           # Local developer Redis provisioning script
+├── Dockerfile                   # Multi-stage hardened non-root container image
+├── docker-compose.yaml          # Multi-container orchestration (App, Worker, DB, Redis)
+├── Makefile                     # Common development, testing, and release targets
+└── user_config.yaml             # Triage rules, schedule preferences, and user context
 ```
 
-### Ingress limits
-
-The API rejects oversized or malformed request data before provider dispatch: agent
-prompts are capped at 8,000 characters; Gmail search queries at 512 characters;
-mail page sizes at 100; OAuth callback code/state values at 4,096/512 characters;
-and Pub/Sub envelopes at `PUBSUB_MAX_ENVELOPE_BYTES` (65,536 bytes by default).
-Recipient lists, subjects, bodies, page tokens, and provider IDs are also bounded.
-Enforce request-rate limits at the authenticated deployment gateway/ingress; the
-application does not implement a second, divergent in-process rate limiter.
-
-
-### Mail content cache policy
-
-Mail detail bodies are cached for **5 minutes**; paginated folders and search
-pages are cached for **60 seconds**. Cache entries are JSON-only and fail open:
-a Redis outage or corrupt value is treated as a cache miss and does not prevent a
-Gmail request. Each mail mutation atomically advances that user's cache
-generation instead of scanning wildcard keys. Older-generation entries may
-remain in Redis only until their normal TTL expires, but cannot be selected by
-new requests after a successful generation advance. The cache is not a durable
-mail-retention store.
-
-
-### Agent execution policy
-
-Agent tool access is a server-owned per-run allowlist, not a prompt capability.
-Automated inbound Gmail triage exposes **zero tools**. Interactive executive and
-streaming runs can use only the tools authorized by their authenticated route and
-available connected account services, and accept at most one primary mutation per
-request. Agent email sends/replies, calendar events, and task creation always
-create typed pending actions for explicit approval; they never perform live
-provider writes directly. Draft creation and marking a message read are the two
-intentional immediate **interactive-only** mutations and are unavailable to
-inbound automation. Direct `/mail/send` and deletion endpoints are separate API
-operations and are not part of the agent tool registry.
-
-Agent prompts render current time per invocation using an IANA `ZoneInfo`
-timezone from the deployment profile. SSE agent streams are nonblocking,
-disconnect-cancellable, deadline/queue-bounded, emit heartbeat comment frames,
-and finish with exactly one `done` or `error` event; they do not support replay.
-
-
-### Provider retry, identity, and retention policy
-
-Google provider failures are classified as permanent, authentication/reconnect,
-quota, retryable transport/read, ambiguous write, or internal. Only read
-operations and explicitly idempotent mutations use bounded exponential backoff
-with jitter and a provider `Retry-After` floor. Email sends, replies, calendar
-creation, task creation, deletion, and other ambiguous writes are dispatched
-once; an uncertain outcome remains `reconciliation_required` and is never
-blind-retried. Gmail star updates accept an explicit desired `starred` state,
-not a read-then-toggle operation.
-
-The persisted case-normalized Google email is the authoritative connected
-account and sender identity. OneBox deliberately fails closed when a selected
-or persisted account email changes; it does not silently reuse credentials for
-a renamed/different account. Legacy account rows are normalized during safe
-credential loading or OAuth persistence.
-
-Terminal pending-action payloads are retained for **30 days**; terminal Gmail
-notification jobs and triage summaries for **14 days**. Reconciliation-required
-actions are retained for operator resolution. The durable worker performs the
-configured periodic cleanup. Mail-cache retention remains limited to its 5
-minute detail and 60 second page TTLs. In production PostgreSQL must require
-TLS, and Redis must be authenticated and use `rediss://` unless explicitly
-configured as a controlled trusted local network.
