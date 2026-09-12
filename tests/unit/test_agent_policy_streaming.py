@@ -116,6 +116,37 @@ async def test_multiple_model_mutation_calls_execute_at_most_one(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "failure_message"),
+    [
+        (AgentTool.CREATE_DRAFT.value, "I could not create the draft. Please try again."),
+        (AgentTool.MARK_AS_READ.value, "I could not mark the message as read. Please try again."),
+    ],
+)
+async def test_immediate_tool_false_result_is_reported_as_a_failure(tool_name, failure_message):
+    calls = []
+
+    async def false_result(**kwargs):
+        calls.append(kwargs)
+        return False
+
+    agent = ExecutiveAgent("owner", provider=_TextProvider())
+    agent._tool_command_keys = {}
+    agent._mutation_count = 0
+    agent.available_python_tools = {tool_name: false_result}
+
+    responses, terminal = await agent._execute_tool_calls(
+        [_function_call(tool_name, {"message_id": "message-1"})],
+        policy=INTERACTIVE_EXECUTIVE_POLICY,
+        turn=0,
+    )
+
+    assert responses == []
+    assert terminal == failure_message
+    assert calls == [{"message_id": "message-1"}]
+
+
+@pytest.mark.asyncio
 async def test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mutation(monkeypatch):
     sent = []
 

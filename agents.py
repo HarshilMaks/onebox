@@ -202,9 +202,13 @@ class ExecutiveAgent(Agent):
                 action_id = result.get("action_id")
                 return responses, f"Approval required. Approve action {action_id} to continue."
             if name == AgentTool.CREATE_DRAFT.value:
-                return responses, "Draft created for your review."
+                if result is True:
+                    return responses, "Draft created for your review."
+                return responses, "I could not create the draft. Please try again."
             if name == AgentTool.MARK_AS_READ.value:
-                return responses, "Message marked as read."
+                if result is True:
+                    return responses, "Message marked as read."
+                return responses, "I could not mark the message as read. Please try again."
             responses.append(_tool_response_part(name, {"result": result}))
         return responses, None
 
