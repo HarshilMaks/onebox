@@ -22,6 +22,8 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 MAX_INLINE_IMAGE_BYTES = 1 * 1024 * 1024
 MAX_HEADER_VALUE_CHARS = 4_096
+MAX_MIME_PART_DEPTH = 32
+MAX_MIME_PARTS = 512
 
 _ALLOWED_TAGS = frozenset(
     {
@@ -175,14 +177,30 @@ def _decode_base64url(data: object, *, max_bytes: int) -> str | None:
 
 
 def _walk_parts(payload: object) -> Iterable[dict[str, Any]]:
+    """Yield depth-first MIME parts within bounded untrusted structure limits."""
     if not isinstance(payload, dict):
         return
-    yield payload
-    parts = payload.get("parts")
-    if not isinstance(parts, list):
-        return
-    for part in parts:
-        yield from _walk_parts(part)
+
+    stack = [(iter((payload,)), 0)]
+    visited_parts = 0
+    while stack:
+        siblings, depth = stack[-1]
+        try:
+            part = next(siblings)
+        except StopIteration:
+            stack.pop()
+            continue
+
+        visited_parts += 1
+        if visited_parts > MAX_MIME_PARTS:
+            return
+        if not isinstance(part, dict):
+            continue
+
+        yield part
+        children = part.get("parts")
+        if depth < MAX_MIME_PART_DEPTH and isinstance(children, list):
+            stack.append((iter(children), depth + 1))
 
 
 def extract_mail_content(payload: object) -> MailContent:

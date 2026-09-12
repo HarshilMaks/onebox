@@ -7,7 +7,14 @@ from typing import Any
 import pytest
 
 from server import redis_cache
-from server.mail.mime import MAX_BODY_BYTES, extract_mail_content, parse_message_date, parse_recipient_addresses
+from server.mail.mime import (
+    MAX_BODY_BYTES,
+    MAX_MIME_PART_DEPTH,
+    MAX_MIME_PARTS,
+    extract_mail_content,
+    parse_message_date,
+    parse_recipient_addresses,
+)
 from server.routes import google_mail
 from server.services import mailbox
 from server.schemas import EmailDetail
@@ -87,6 +94,33 @@ def test_mime_decoding_is_bounded_and_address_date_helpers_are_safe():
     assert extract_mail_content({"mimeType": "text/plain", "body": {"data": oversized}}).body == ""
     assert parse_recipient_addresses("broken, valid@example.test") == ["valid@example.test"]
     assert datetime.fromisoformat(parse_message_date("invalid date")).tzinfo == timezone.utc
+
+
+@pytest.mark.asyncio
+async def test_deep_mime_payload_stops_at_depth_limit_and_uses_snippet_fallback():
+    payload: dict[str, Any] = {"mimeType": "multipart/mixed", "parts": []}
+    current = payload
+    for _ in range(MAX_MIME_PART_DEPTH + 1):
+        child: dict[str, Any] = {"mimeType": "multipart/mixed", "parts": []}
+        current["parts"] = [child]
+        current = child
+    current.update({"mimeType": "text/plain", "body": {"data": _encoded("too deep")}})
+
+    parsed = await mailbox.parse_message(None, {"id": "deep", "snippet": "safe snippet", "payload": payload})
+
+    assert parsed["body"] == "safe snippet"
+
+
+def test_broad_mime_payload_stops_at_total_part_limit():
+    payload = {
+        "mimeType": "multipart/mixed",
+        "parts": [{"mimeType": "application/octet-stream"} for _ in range(MAX_MIME_PARTS)]
+        + [{"mimeType": "text/plain", "body": {"data": _encoded("too broad")}}],
+    }
+
+    content = extract_mail_content(payload)
+
+    assert content.body == ""
 
 
 class _MemoryRedisAdapter:
