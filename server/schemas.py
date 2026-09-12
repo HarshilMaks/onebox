@@ -1,9 +1,98 @@
-# server/schemas.py
+"""Stable request and response schemas exposed by the OneBox HTTP API."""
+
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
+
+
+class AgentStreamEventType(str, Enum):
+    """Terminal and non-terminal event names emitted in agent SSE frames."""
+
+    TOKEN = "token"
+    TOOL_RESULT = "tool_result"
+    ERROR = "error"
+    DONE = "done"
+
+
+class PendingActionType(str, Enum):
+    """Provider effects that are always represented by a pending action."""
+
+    SEND_EMAIL = "send_email"
+    SEND_REPLY = "send_reply"
+    CREATE_EVENT = "create_event"
+    CREATE_TASK = "create_task"
+
+
+class PendingActionStatus(str, Enum):
+    """Persisted pending-action lifecycle states."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+
+
+class MailMutationStatus(str, Enum):
+    MARKED_READ = "marked as read"
+    MARKED_UNREAD = "marked as unread"
+    MOVED_TO_TRASH = "moved to trash"
+    RESTORED_FROM_TRASH = "restored from trash"
+    PERMANENTLY_DELETED = "permanently deleted"
+    STARRED = "starred"
+    UNSTARRED = "unstarred"
+
+
+class MailMutationAction(str, Enum):
+    SET = "set"
+
+
+class SendEmailStatus(str, Enum):
+    SENT = "sent"
+
+
+class SaveDraftStatus(str, Enum):
+    SAVED = "draft saved"
+    UPDATED = "draft updated"
+
+
+class HealthStatus(str, Enum):
+    HEALTHY = "healthy"
+
+
+class GlobalGmailHealthStatus(str, Enum):
+    UNAVAILABLE = "unavailable"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+
+
+class GlobalGmailServiceStatus(str, Enum):
+    UNAVAILABLE = "unavailable"
+    READY = "ready"
+    DEGRADED = "degraded"
+
+
+class InboxCheckStatus(str, Enum):
+    CHECKED = "checked"
+
+
+class RootStatus(str, Enum):
+    OK = "ok"
+
+
+class AutomationAvailability(str, Enum):
+    DURABLE_WORKER_ENABLED = "durable_worker_enabled"
+    DISABLED = "disabled"
+
+
+class AgentConnectionStatus(str, Enum):
+    CONNECTED = "connected"
+    NOT_CONNECTED = "not_connected"
 
 
 class EmailListItem(BaseModel):
@@ -22,41 +111,27 @@ class EmailListItem(BaseModel):
 
 
 class EmailDetail(EmailListItem):
-    """Complete data returned when a single email is opened."""
+    """Complete mail detail with plain text and optional sanitized HTML.
+
+    ``body`` is always text. Clients may render ``sanitized_html`` only when
+    they intentionally opt into the strict server-side sanitization policy.
+    """
 
     cc: List[str] = Field(default_factory=list)
     body: str
+    sanitized_html: Optional[str] = None
 
 
 class EmailDraft(BaseModel):
-    to: List[EmailStr]
-    subject: str
-    body: str
-    draft_id: Optional[str] = None
+    to: List[EmailStr] = Field(min_length=1, max_length=50)
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=20_000)
+    draft_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
 
 
 class EmailPage(BaseModel):
     emails: List[EmailListItem]
     next_page_token: Optional[str] = None
-
-
-class OAuthCallback(BaseModel):
-    code: str
-    state: str | None = None
-
-
-class TokenInfo(BaseModel):
-    access_token: str
-    refresh_token: str
-    scope: str
-    token_type: str
-    expires_in: int
-
-
-class AgentTokenOut(BaseModel):
-    user_id: UUID
-    token: TokenInfo
-    updated_at: datetime
 
 
 class AgentSuccessResponse(BaseModel):
@@ -72,62 +147,65 @@ class AgentStreamEvent(BaseModel):
     for client-side branching. ``content`` is always safe to display.
     """
 
-    event: str
+    event: AgentStreamEventType
     content: str
     error_code: Optional[str] = None
 
 
 class AgentErrorResponse(BaseModel):
-    """Standard envelope for a failed agent request.
-
-    `error` is a short, stable machine-readable code; `detail` is a
-    human-readable message safe to show to a client. Internal exception
-    text is never placed directly in `detail`.
-    """
+    """Standard envelope for failed agent requests."""
 
     error: str
     detail: str
 
 
+class PublicErrorResponse(AgentErrorResponse):
+    """Stable safe HTTP error envelope shared by all routes."""
+
+
 class MailMutationResponse(BaseModel):
-    """Standard response for a single-email mutation (read/unread/trash/
-    restore/delete/star). `action` is only present for the star endpoint,
-    which can report a no-op when the requested state already matches."""
+    """Stable response for a single-email mutation."""
 
     id: str
-    status: str
-    action: Optional[str] = None
+    status: MailMutationStatus
+    action: Optional[MailMutationAction] = None
+
+
+class StarStateUpdate(BaseModel):
+    """Desired final star state for an idempotent Gmail mutation."""
+
+    starred: bool
 
 
 class SendEmailResponse(BaseModel):
     id: Optional[str] = None
-    status: str
+    status: SendEmailStatus
 
 
 class SaveDraftResponse(BaseModel):
     id: str
-    status: str
+    status: SaveDraftStatus
     draft_id: str
 
 
 class HealthResponse(BaseModel):
-    status: str
+    status: HealthStatus
 
 
 class GlobalGmailHealthResponse(BaseModel):
-    status: str
+    status: GlobalGmailHealthStatus
     detail: str
-    gmail_service_status: str
+    gmail_service_status: GlobalGmailServiceStatus
 
 
 class CheckInboxResponse(BaseModel):
-    status: str
+    status: InboxCheckStatus
     inbox_message_count_estimate: int
 
 
 class ReadinessResponse(BaseModel):
-    status: str
-    global_gmail_service: str
+    status: RootStatus
+    global_gmail_service: AutomationAvailability
 
 
 class OAuthStartResponse(BaseModel):
@@ -139,7 +217,7 @@ class AgentStatusResponse(BaseModel):
     user_id: str
     email: str
     is_gmail_connected: bool
-    status: str
+    status: AgentConnectionStatus
 
 
 class VerifyAndCreateEntryResponse(BaseModel):
@@ -152,11 +230,11 @@ class PendingActionResponse(BaseModel):
     """Immutable, owner-bound external action awaiting or reflecting approval."""
 
     id: UUID
-    action_type: str
+    action_type: PendingActionType
     payload: dict
     payload_hash: str
     summary: str
-    status: str
+    status: PendingActionStatus
     result: Optional[dict] = None
     error_code: Optional[str] = None
     created_at: datetime

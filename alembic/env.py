@@ -7,14 +7,15 @@ from alembic import context
 # Add the parent directory to sys.path to import server modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from server.models import Base  # ← your declarative base
-from server.config import settings  # assuming you defined this in database.py
+from server.models import Base
+from server.database import migration_database_url
+from server.config import settings
 
 # Alembic Config object
 config = context.config
 
 # Override DB URL using your actual database config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("asyncpg", "psycopg2"))
+config.set_main_option("sqlalchemy.url", migration_database_url(settings.DATABASE_URL))
 
 # Set up logging
 fileConfig(config.config_file_name)

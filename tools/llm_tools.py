@@ -1,11 +1,16 @@
 import asyncio
 import logging
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import pytz
 from googleapiclient.discovery import Resource
-from server.integrations.google import GoogleProviderError, execute_google_request
+from server.integrations.google import (
+    GoogleProviderError,
+    execute_google_idempotent_request,
+    execute_google_read_request,
+    execute_google_request,
+)
 from server.services.pending_actions import (
     ACTION_CREATE_EVENT,
     ACTION_CREATE_TASK,
@@ -14,10 +19,8 @@ from server.services.pending_actions import (
     create_pending_action,
     resolve_reply_target,
 )
-from tools.logging_config import setup_logging
 from tools.utils import create_raw_message, format_datetime_with_timezone
 
-setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -167,38 +170,24 @@ async def mark_as_read(gmail_service: Resource, message_id: str) -> bool:
         userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
     )
     try:
-        await execute_google_request(request, resource=gmail_service)
+        await execute_google_idempotent_request(request, resource=gmail_service)
         return True
     except GoogleProviderError:
         logger.warning("Unable to mark %s as read", message_id, exc_info=True)
         return False
 
 
-async def mark_as_unread(gmail_service: Resource, message_id: str) -> bool:
-    if not gmail_service:
-        return False
-    request = gmail_service.users().messages().modify(
-        userId="me", id=message_id, body={"addLabelIds": ["UNREAD"]}
-    )
-    try:
-        await execute_google_request(request, resource=gmail_service)
-        return True
-    except GoogleProviderError:
-        logger.warning("Unable to mark %s as unread", message_id, exc_info=True)
-        return False
-
-
 async def get_calendar_events(
     calendar_service: Resource,
     date_strs: List[str],
-    target_timezone: str = "Asia/Kolkata",
+    target_timezone: str = "UTC",
 ) -> Dict[str, str]:
     if not calendar_service:
         return {date_str: "Calendar service unavailable" for date_str in date_strs}
 
     try:
-        tz = pytz.timezone(target_timezone)
-    except Exception:
+        tz = ZoneInfo(target_timezone)
+    except ZoneInfoNotFoundError:
         return {date_str: "Invalid timezone" for date_str in date_strs}
 
     results: Dict[str, str] = {}
@@ -209,17 +198,17 @@ async def get_calendar_events(
             results[date_str] = "Invalid date format. Use 'dd-mm-yyyy'."
             continue
 
-        start_local = tz.localize(datetime.combine(day, datetime_time.min))
-        end_local = tz.localize(datetime.combine(day, datetime_time.max))
+        start_local = datetime.combine(day, datetime_time.min, tzinfo=tz)
+        end_local = datetime.combine(day, datetime_time.max, tzinfo=tz)
         request = calendar_service.events().list(
             calendarId="primary",
-            timeMin=start_local.astimezone(pytz.utc).isoformat(),
-            timeMax=end_local.astimezone(pytz.utc).isoformat(),
+            timeMin=start_local.astimezone(timezone.utc).isoformat(),
+            timeMax=end_local.astimezone(timezone.utc).isoformat(),
             singleEvents=True,
             orderBy="startTime",
         )
         try:
-            events_result = await execute_google_request(request, resource=calendar_service)
+            events_result = await execute_google_read_request(request, resource=calendar_service)
         except GoogleProviderError:
             logger.warning("Calendar lookup failed for %s", date_str, exc_info=True)
             results[date_str] = "Calendar service is temporarily unavailable."
