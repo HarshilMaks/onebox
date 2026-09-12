@@ -160,6 +160,10 @@ class GmailMailboxState(Base):
             "resync_generation >= 0 AND resync_attempt_count >= 0 AND resync_message_count >= 0",
             name="ck_gmail_mailbox_states_resync_counts",
         ),
+        CheckConstraint(
+            "watch_renewal_attempt_count >= 0",
+            name="ck_gmail_mailbox_states_watch_renewal_attempt_count",
+        ),
     )
 
     mailbox_email = Column(String(320), primary_key=True)
@@ -169,6 +173,8 @@ class GmailMailboxState(Base):
     watch_expires_at = Column(DateTime(timezone=True), nullable=True)
     watch_lease_token = Column(String(128), nullable=True)
     watch_lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    watch_renewal_attempt_count = Column(Integer, nullable=False, default=0)
+    watch_renewal_next_attempt_at = Column(DateTime(timezone=True), nullable=True)
     resync_required = Column(Boolean, nullable=False, default=False)
     resync_state = Column(String(32), nullable=False, default="idle")
     resync_generation = Column(BigInteger, nullable=False, default=0)

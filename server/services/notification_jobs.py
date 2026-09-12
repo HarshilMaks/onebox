@@ -732,6 +732,8 @@ async def claim_watch_renewal(mailbox_email: str, owner_id: UUID) -> str | None:
             db.add(state)
         elif state.user_id != owner_id:
             return None
+        if state.watch_renewal_next_attempt_at is not None and state.watch_renewal_next_attempt_at > now:
+            return None
         due_at = now + timedelta(seconds=settings.GMAIL_WATCH_RENEWAL_SECONDS)
         if state.watch_expires_at is not None and state.watch_expires_at > due_at:
             return None
@@ -766,6 +768,8 @@ async def complete_watch_renewal(
         state.watch_expires_at = expires_at
         state.watch_lease_token = None
         state.watch_lease_expires_at = None
+        state.watch_renewal_attempt_count = 0
+        state.watch_renewal_next_attempt_at = None
         state.watch_last_error_code = None
         state.last_error_code = None
         await db.commit()
@@ -788,6 +792,8 @@ async def fail_watch_renewal(mailbox_email: str, lease_token: str, error_code: s
         state.last_error_code = error_code
         state.watch_lease_token = None
         state.watch_lease_expires_at = None
+        state.watch_renewal_attempt_count += 1
+        state.watch_renewal_next_attempt_at = _retry_at(state.watch_renewal_attempt_count)
         await db.commit()
 
 

@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import pytest
@@ -341,6 +342,65 @@ async def test_watch_renewal_failure_releases_claimed_lease(
         assert state.watch_lease_expires_at is None
         assert state.last_error_code == expected_error
         assert state.watch_last_error_code == expected_error
+        assert state.watch_renewal_attempt_count == 1
+        assert state.watch_renewal_next_attempt_at is not None
+
+
+@pytest.mark.asyncio
+async def test_watch_renewal_failures_use_durable_backoff_and_reset_on_success(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+    await seed_mailbox_state(notification_db, owner_id)
+    clock = [datetime(2026, 9, 12, tzinfo=timezone.utc)]
+    monkeypatch.setattr(notification_jobs, "_now", lambda: clock[0])
+
+    first_claim = await notification_jobs.claim_watch_renewal("owner@example.com", owner_id)
+    assert first_claim is not None
+    await notification_jobs.fail_watch_renewal("owner@example.com", first_claim, "watch_provider_unavailable")
+
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.watch_renewal_attempt_count == 1
+        first_retry_at = state.watch_renewal_next_attempt_at
+        assert first_retry_at == clock[0] + timedelta(
+            seconds=notification_jobs.settings.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS
+        )
+
+    assert await notification_jobs.claim_watch_renewal("owner@example.com", owner_id) is None
+    clock[0] = first_retry_at
+
+    second_claim = await notification_jobs.claim_watch_renewal("owner@example.com", owner_id)
+    assert second_claim is not None
+    await notification_jobs.fail_watch_renewal("owner@example.com", second_claim, "watch_provider_unavailable")
+
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.watch_renewal_attempt_count == 2
+        second_retry_at = state.watch_renewal_next_attempt_at
+        assert second_retry_at == clock[0] + timedelta(
+            seconds=min(
+                notification_jobs.settings.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS * 2,
+                notification_jobs.settings.GMAIL_RETRY_BACKOFF_MAX_SECONDS,
+            )
+        )
+
+    clock[0] = second_retry_at
+    final_claim = await notification_jobs.claim_watch_renewal("owner@example.com", owner_id)
+    assert final_claim is not None
+    assert await notification_jobs.complete_watch_renewal(
+        "owner@example.com",
+        final_claim,
+        history_id=101,
+        expires_at=clock[0] + timedelta(days=2),
+    )
+
+    async with notification_db() as session:
+        state = await session.get(GmailMailboxState, "owner@example.com")
+        assert state is not None
+        assert state.watch_renewal_attempt_count == 0
+        assert state.watch_renewal_next_attempt_at is None
+        assert state.watch_last_error_code is None
 
 
 @pytest.mark.asyncio
