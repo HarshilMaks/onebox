@@ -69,3 +69,16 @@ def test_checked_in_search_client_contract_matches_the_paginated_backend_respons
     client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
     assert "page_token?: string | null;" in client_contract
     assert "searchEmails: EmailPage;" in client_contract
+
+
+def test_checked_in_star_client_contract_matches_the_required_state_request():
+    schema = app.openapi()
+    star_operation = schema["paths"]["/mail/emails/{email_id}/star"]["post"]
+    star_request = star_operation["requestBody"]["content"]["application/json"]["schema"]
+    assert star_request["$ref"].endswith("StarStateUpdate")
+    assert schema["components"]["schemas"]["StarStateUpdate"]["required"] == ["starred"]
+
+    client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
+    assert "export interface StarStateUpdate" in client_contract
+    assert "starred: boolean;" in client_contract
+    assert "toggleStar: StarStateUpdate;" in client_contract

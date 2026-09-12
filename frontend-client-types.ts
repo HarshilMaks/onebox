@@ -78,6 +78,11 @@ export interface MailMutationResponse {
   action?: string | null;
 }
 
+/** Desired final star state for the idempotent mail-star mutation. */
+export interface StarStateUpdate {
+  starred: boolean;
+}
+
 export interface SendEmailResponse {
   id?: string | null;
   status: string;
@@ -290,6 +295,7 @@ export interface OneboxApiRequestBody {
   invokeExecutiveAgent: AgentQuery;
   invokeGeneralAgent: AgentQuery;
   streamGeneralAgent: AgentQuery;
+  toggleStar: StarStateUpdate;
   sendEmail: EmailDraftRequest;
   saveDraft: EmailDraftRequest;
 }
