@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
     # Safe provider reads/idempotent writes use this observable bounded retry policy.
+    # Its deadline bounds both retry waits and each individual provider attempt.
     # Ambiguous external writes are never retried by this policy.
     PROVIDER_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
     PROVIDER_RETRY_INITIAL_SECONDS: float = Field(default=0.25, gt=0, le=60)

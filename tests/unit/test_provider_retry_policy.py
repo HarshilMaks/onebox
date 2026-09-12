@@ -9,8 +9,9 @@ from server.routes import google_mail
 from server.schemas import StarStateUpdate
 
 
-def _retry_settings(*, attempts: int = 3, deadline: float = 30.0):
+def _retry_settings(*, attempts: int = 3, deadline: float = 30.0, provider_timeout: float = 20.0):
     return SimpleNamespace(
+        PROVIDER_TIMEOUT_SECONDS=provider_timeout,
         PROVIDER_RETRY_MAX_ATTEMPTS=attempts,
         PROVIDER_RETRY_INITIAL_SECONDS=1.0,
         PROVIDER_RETRY_MAX_SECONDS=4.0,
@@ -107,6 +108,36 @@ async def test_retryable_503_is_bounded_and_permanent_error_is_not_retried(monke
             sleep=lambda _delay: _immediate(),
         )
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_attempt_timeout_is_capped_by_remaining_deadline(monkeypatch):
+    class _Clock:
+        now = 0.0
+
+        def time(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    monkeypatch.setattr(google, "settings", _retry_settings(attempts=2, deadline=5.0, provider_timeout=20.0))
+    monkeypatch.setattr(google.asyncio, "get_running_loop", lambda: clock)
+    attempt_timeouts = []
+
+    async def deadline_consuming_attempt(_operation, *_args, timeout, **_kwargs):
+        attempt_timeouts.append(timeout)
+        clock.now += timeout
+        raise google.GoogleOperationUnavailable(503)
+
+    monkeypatch.setattr(google, "run_google_operation", deadline_consuming_attempt)
+
+    with pytest.raises(google.GoogleOperationUnavailable):
+        await google.run_google_retryable_operation(
+            lambda: None,
+            safety=google.GoogleOperationSafety.READ,
+            random_value=lambda: 0.5,
+        )
+
+    assert attempt_timeouts == [5.0]
 
 
 async def _immediate() -> None:
