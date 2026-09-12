@@ -198,6 +198,7 @@ export interface EmailListQuery {
 export interface EmailSearchQuery {
   q: string;
   limit?: number; // default 20, must be >= 1
+  page_token?: string | null;
 }
 
 /**
@@ -273,7 +274,7 @@ export interface OneboxApiResponse {
   toggleStar: MailMutationResponse;
   sendEmail: SendEmailResponse;
   saveDraft: SaveDraftResponse;
-  searchEmails: EmailListItem[];
+  searchEmails: EmailPage;
   getMailHealth: HealthResponse;
   checkInboxCount: CheckInboxResponse;
   getGlobalGmailHealth: GlobalGmailHealthResponse;

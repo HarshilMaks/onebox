@@ -57,3 +57,15 @@ def test_compose_mounts_the_oauth_token_keyring_for_all_runtime_roles():
     assert "OAUTH_TOKEN_KEYRING_PATH: /run/secrets/onebox-oauth-token-keyring.json" in compose
     assert "OAUTH_TOKEN_ACTIVE_KEY_ID: ${OAUTH_TOKEN_ACTIVE_KEY_ID:?Set OAUTH_TOKEN_ACTIVE_KEY_ID" in compose
     assert "${OAUTH_TOKEN_KEYRING_HOST_PATH:?Set OAUTH_TOKEN_KEYRING_HOST_PATH}" in compose
+
+
+def test_checked_in_search_client_contract_matches_the_paginated_backend_response():
+    schema = app.openapi()
+    search_operation = schema["paths"]["/mail/search"]["get"]
+    search_response = search_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert search_response["$ref"].endswith("EmailPage")
+    assert any(parameter["name"] == "page_token" for parameter in search_operation["parameters"])
+
+    client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
+    assert "page_token?: string | null;" in client_contract
+    assert "searchEmails: EmailPage;" in client_contract
