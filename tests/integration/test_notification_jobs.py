@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from server.mail.mime import MAX_BODY_BYTES
 from server.models import Base, GmailMailboxState, GmailNotificationJob
 from server.services import notification_jobs
 from server.services.notification_jobs import (
@@ -662,6 +663,62 @@ async def test_malformed_gmail_payload_is_terminal_without_llm(notification_db, 
         work = await session.scalar(
             select(notification_jobs.GmailTriageWork).where(
                 notification_jobs.GmailTriageWork.message_id == "malformed-message"
+            )
+        )
+        assert work is not None
+        assert work.state == "dead_letter"
+        assert work.triage_summary is None
+        assert work.last_error_code == "message_payload_invalid"
+
+
+@pytest.mark.asyncio
+async def test_oversized_gmail_payload_is_terminal_without_llm(notification_db, monkeypatch):
+    owner_id = uuid.uuid4()
+    await seed_mailbox_state(notification_db, owner_id)
+
+    class Messages:
+        def get(self, **_kwargs):
+            return object()
+
+    class Users:
+        def messages(self):
+            return Messages()
+
+    class Service:
+        def users(self):
+            return Users()
+
+    async def oversized_message(_request, **_kwargs):
+        return {
+            "id": "oversized-message",
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Oversized"}],
+                "mimeType": "text/plain",
+                "body": {
+                    "data": base64.urlsafe_b64encode(b"x" * (MAX_BODY_BYTES + 1)).decode().rstrip("=")
+                },
+            },
+        }
+
+    class AgentMustNotRun:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("oversized payload must not reach ExecutiveAgent")
+
+    monkeypatch.setattr(mail_notifications, "execute_google_request", oversized_message)
+    monkeypatch.setattr(mail_notifications, "ExecutiveAgent", AgentMustNotRun)
+    completed = await mail_notifications._triage_message(
+        service=Service(),
+        owner_id=owner_id,
+        mailbox_email="owner@example.com",
+        message_id="oversized-message",
+        source_history_id=101,
+    )
+    assert completed is True
+
+    async with notification_db() as session:
+        work = await session.scalar(
+            select(notification_jobs.GmailTriageWork).where(
+                notification_jobs.GmailTriageWork.message_id == "oversized-message"
             )
         )
         assert work is not None

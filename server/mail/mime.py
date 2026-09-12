@@ -157,7 +157,7 @@ class _StrictHtmlSanitizer(HTMLParser):
         return "".join(self._text).strip()
 
 
-def _decode_base64url(data: object, *, max_bytes: int) -> str | None:
+def decode_base64url_text(data: object, *, max_bytes: int) -> str | None:
     """Decode bounded Gmail base64url content without allocating unbounded data."""
     if not isinstance(data, str) or not data:
         return None
@@ -213,7 +213,7 @@ def extract_mail_content(payload: object) -> MailContent:
             continue
         body = part.get("body")
         data = body.get("data") if isinstance(body, dict) else None
-        decoded = _decode_base64url(data, max_bytes=MAX_BODY_BYTES)
+        decoded = decode_base64url_text(data, max_bytes=MAX_BODY_BYTES)
         if decoded is None:
             continue
         if mime_type.lower() == "text/plain" and plain_body is None:

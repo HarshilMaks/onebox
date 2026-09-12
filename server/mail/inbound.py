@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from typing import Any
+
+from server.mail.mime import MAX_BODY_BYTES, decode_base64url_text
 
 
 logger = logging.getLogger(__name__)
@@ -113,8 +114,11 @@ def get_email_body(payload: dict[str, Any]) -> str:
             continue
         if not isinstance(encoded, str):
             raise ValueError("invalid body data")
-        padded = encoded + "=" * (-len(encoded) % 4)
-        extracted = base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
+        if not encoded:
+            continue
+        extracted = decode_base64url_text(encoded, max_bytes=MAX_BODY_BYTES)
+        if extracted is None:
+            raise ValueError("invalid or oversized body data")
         if extracted:
             return extracted
     return ""

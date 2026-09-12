@@ -67,6 +67,20 @@ def _encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
 
+def test_oversized_inbound_body_is_a_terminal_parser_error():
+    content = mail.extract_email_content(
+        {
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Oversized"}],
+                "mimeType": "text/plain",
+                "body": {"data": _encoded("x" * (mail.MAX_BODY_BYTES + 1))},
+            }
+        }
+    )
+
+    assert content == {"error": "Invalid message payload"}
+
+
 def test_inbound_parser_traverses_nested_multipart_containers_to_first_nonempty_text_leaf():
     content = mail.extract_email_content(
         {
