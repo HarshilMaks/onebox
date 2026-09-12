@@ -105,33 +105,62 @@ async def fetch_message_page(
     if not isinstance(messages_metadata, list) or not messages_metadata:
         return {"emails": [], "next_page_token": response.get("nextPageToken")}
 
+    requested_message_ids: list[str] = []
+    for metadata in messages_metadata[:limit]:
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
+            logger.warning("Gmail message page contained invalid message metadata")
+            raise HTTPException(status_code=502, detail="Gmail returned an incomplete message page. Please try again.")
+        requested_message_ids.append(metadata["id"])
+
     batch = service.new_batch_http_request()
     message_details: dict[str, dict[str, Any]] = {}
+    failed_batch_detail_ids: set[str] = set()
 
     def parse_batch_response(request_id: str, batch_response: Any, exception: Exception | None) -> None:
         if exception is not None or not isinstance(batch_response, dict):
-            logger.warning("Gmail message detail could not be fetched")
+            failed_batch_detail_ids.add(request_id)
             return
         message_id = batch_response.get("id")
         if isinstance(message_id, str):
             message_details[message_id] = batch_response
+        else:
+            failed_batch_detail_ids.add(request_id)
 
-    for metadata in messages_metadata[:limit]:
-        if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
-            continue
-        message_id = metadata["id"]
+    for message_id in requested_message_ids:
         batch.add(
             service.users().messages().get(userId=user_id, id=message_id, format="full"),
             callback=parse_batch_response,
             request_id=message_id,
         )
-    await execute_gmail_request(service, batch, safety=GoogleOperationSafety.READ)
 
-    emails: list[dict[str, Any]] = []
-    for metadata in messages_metadata[:limit]:
-        message_id = metadata.get("id") if isinstance(metadata, dict) else None
-        if isinstance(message_id, str) and (raw_message := message_details.get(message_id)) is not None:
-            emails.append(to_email_list_item(await parse_message(service, raw_message, user_id)))
+    try:
+        await execute_gmail_request(service, batch, safety=GoogleOperationSafety.READ)
+    except HTTPException:
+        logger.warning("Gmail message detail batch request failed; retrying details individually")
+
+    for message_id in requested_message_ids:
+        if message_id in message_details:
+            continue
+        if message_id in failed_batch_detail_ids:
+            logger.warning("Gmail message detail batch item failed; retrying individually")
+        try:
+            detail = await execute_gmail_request(
+                service,
+                service.users().messages().get(userId=user_id, id=message_id, format="full"),
+                safety=GoogleOperationSafety.READ,
+            )
+        except HTTPException:
+            logger.warning("Gmail message detail retry failed")
+            raise
+        if not isinstance(detail, dict) or detail.get("id") != message_id:
+            logger.warning("Gmail message detail retry returned an invalid response")
+            raise HTTPException(status_code=502, detail="Gmail returned an incomplete message page. Please try again.")
+        message_details[message_id] = detail
+
+    emails = [
+        to_email_list_item(await parse_message(service, message_details[message_id], user_id))
+        for message_id in requested_message_ids
+    ]
     return {"emails": emails, "next_page_token": response.get("nextPageToken")}
 
 

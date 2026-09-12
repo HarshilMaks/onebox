@@ -295,3 +295,98 @@ async def test_search_pages_are_cached_as_dicts_and_follow_gmail_tokens(bypass_m
     assert [item["id"] for item in first["emails"] + second["emails"]] == ["one", "two", "four"]
     assert [call["q"] for call in service.list_calls] == ["from:owner@example.test", "from:owner@example.test"]
     assert len(service.list_calls) == 2
+
+
+class _PartiallyFailingBatch(_Batch):
+    def __init__(self, failed_message_ids: set[str]) -> None:
+        super().__init__()
+        self.failed_message_ids = failed_message_ids
+
+    def run(self):
+        for request_id, request, callback in self.items:
+            if request_id in self.failed_message_ids:
+                callback(request_id, None, RuntimeError("batch detail failure"))
+            else:
+                callback(request_id, request.run(), None)
+        return None
+
+
+class _DetailFailureService(_PagedGmailService):
+    def __init__(self, *, batch_failure_ids: set[str], individual_failure_ids: set[str]) -> None:
+        super().__init__()
+        self.batch_failure_ids = batch_failure_ids
+        self.individual_failure_ids = individual_failure_ids
+        self.detail_get_calls: list[str] = []
+
+    def get(self, *, id: str, **kwargs):
+        self.detail_get_calls.append(id)
+        if id in self.individual_failure_ids and self.detail_get_calls.count(id) > 1:
+            return _Request(lambda: _raise_detail_unavailable())
+        return super().get(id=id, **kwargs)
+
+    def new_batch_http_request(self):
+        return _PartiallyFailingBatch(self.batch_failure_ids)
+
+
+def _raise_detail_unavailable():
+    raise google_mail.HTTPException(status_code=503, detail="Gmail is temporarily unavailable. Please try again.")
+
+
+@pytest.mark.asyncio
+async def test_page_retries_missing_batch_detail_as_safe_read_before_returning_token(monkeypatch):
+    service = _DetailFailureService(batch_failure_ids={"two"}, individual_failure_ids=set())
+    safeties = []
+
+    async def execute(_service, request, **kwargs):
+        safeties.append(kwargs["safety"])
+        return request.run()
+
+    monkeypatch.setattr(mailbox, "execute_gmail_request", execute)
+
+    page = await mailbox.fetch_message_page(service, user_id="me", limit=2)
+
+    assert [email["id"] for email in page["emails"]] == ["one", "two"]
+    assert page["next_page_token"] == "search-next"
+    assert service.detail_get_calls == ["one", "two", "two"]
+    assert safeties == [
+        mailbox.GoogleOperationSafety.READ,
+        mailbox.GoogleOperationSafety.READ,
+        mailbox.GoogleOperationSafety.READ,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_page_with_unavailable_detail_is_not_cached_or_exposed_with_next_token(monkeypatch):
+    service = _DetailFailureService(batch_failure_ids={"two"}, individual_failure_ids={"two"})
+    cache_writes = []
+
+    async def cache_key(_user_id: str, namespace: str) -> str:
+        return namespace
+
+    async def cache_miss(_key: str):
+        return None
+
+    async def cache_set(*args, **kwargs):
+        cache_writes.append((args, kwargs))
+        return True
+
+    async def execute(_service, request, **_kwargs):
+        return request.run()
+
+    monkeypatch.setattr(google_mail, "user_mail_cache_key", cache_key)
+    monkeypatch.setattr(google_mail, "cache_get", cache_miss)
+    monkeypatch.setattr(google_mail, "cache_set", cache_set)
+    monkeypatch.setattr(mailbox, "execute_gmail_request", execute)
+
+    with pytest.raises(google_mail.HTTPException) as raised:
+        await google_mail.fetch_emails(
+            folder="inbox",
+            limit=2,
+            page_token=None,
+            user_info={"user_id": "user-1"},
+            service=service,
+        )
+
+    assert raised.value.status_code == 503
+    assert cache_writes == []
+    assert service.detail_get_calls == ["one", "two", "two"]
