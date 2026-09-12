@@ -48,8 +48,14 @@ jobs:
       POSTGRES_PASSWORD: test-password
       GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH: /tmp/onebox-oauth-client.json
       GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH: /tmp/onebox-service-account.json
+      OAUTH_TOKEN_KEYRING_PATH: /tmp/onebox-oauth-keyring.json
       OAUTH_TOKEN_KEYRING_HOST_PATH: /tmp/onebox-oauth-keyring.json
       OAUTH_TOKEN_ACTIVE_KEY_ID: test-key-id
+      AUTOMATION_OWNER_ID: 00000000-0000-0000-0000-000000000001
+      PUBSUB_TOPIC: projects/onebox-test-project/topics/gmail-notifications
+      PUBSUB_SUBSCRIPTION: projects/onebox-test-project/subscriptions/gmail-notifications
+      PUBSUB_PUSH_AUDIENCE: https://api.example.invalid/mail/notifications
+      PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL: pubsub-push@onebox-test-project.iam.gserviceaccount.com
     steps:
       - uses: actions/checkout@v4
         with:
