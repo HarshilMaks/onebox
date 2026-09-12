@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -60,6 +61,61 @@ def test_parser_error_sentinel_is_not_analyzable_mail():
         {"payload": {"headers": [{"name": "Subject"}]}},
     ):
         assert "error" in mail.extract_email_content(malformed)
+
+
+def _encoded(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+
+def test_inbound_parser_traverses_nested_multipart_containers_to_first_nonempty_text_leaf():
+    content = mail.extract_email_content(
+        {
+            "id": "nested-message",
+            "payload": {
+                "headers": [
+                    {"name": "Subject", "value": "Nested"},
+                    {"name": "From", "value": "sender@example.test"},
+                ],
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {
+                        "mimeType": "multipart/related",
+                        "parts": [
+                            {"mimeType": "application/pdf", "body": {"data": _encoded("ignored")}},
+                            {
+                                "mimeType": "multipart/alternative",
+                                "parts": [
+                                    {"mimeType": "text/html", "body": {"data": _encoded("")}},
+                                    {"mimeType": "text/plain", "body": {"data": _encoded("nested body")}},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert content["body"] == "nested body"
+
+
+def test_inbound_mime_traversal_stops_at_depth_and_part_limits():
+    deep_payload: dict[str, object] = {"mimeType": "multipart/mixed", "parts": []}
+    current = deep_payload
+    for _ in range(mail.MAX_INBOUND_MIME_PART_DEPTH + 1):
+        child: dict[str, object] = {"mimeType": "multipart/mixed", "parts": []}
+        current["parts"] = [child]
+        current = child
+    current.update({"mimeType": "text/plain", "body": {"data": _encoded("too deep")}})
+
+    broad_payload = {
+        "mimeType": "multipart/mixed",
+        "parts": [{"mimeType": "application/octet-stream"} for _ in range(mail.MAX_INBOUND_MIME_PARTS)]
+        + [{"mimeType": "text/plain", "body": {"data": _encoded("too broad")}}],
+    }
+
+    assert mail.get_email_body(deep_payload) == ""
+    assert mail.get_email_body(broad_payload) == ""
 
 
 @pytest.mark.asyncio

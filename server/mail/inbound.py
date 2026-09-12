@@ -10,6 +10,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+MAX_INBOUND_MIME_PART_DEPTH = 32
+MAX_INBOUND_MIME_PARTS = 512
+
 
 def should_process_email(email_content: dict[str, Any]) -> bool:
     """Apply the analysis-only skip policy without mutating mailbox state."""
@@ -65,33 +68,53 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_email_body(payload: dict[str, Any]) -> str:
-    """Extract text safely; malformed nested Gmail parts are never coerced."""
+    """Return the first nonempty text leaf within bounded, untrusted MIME structure."""
     if not isinstance(payload, dict):
         raise ValueError("invalid MIME part")
-    body = payload.get("body")
-    if body is not None:
-        if not isinstance(body, dict):
-            raise ValueError("invalid body")
-        encoded = body.get("data")
-        if encoded is not None:
-            if not isinstance(encoded, str):
-                raise ValueError("invalid body data")
-            padded = encoded + "=" * (-len(encoded) % 4)
-            return base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
-    parts = payload.get("parts")
-    if parts is None:
-        return ""
-    if not isinstance(parts, list):
-        raise ValueError("invalid MIME parts")
-    for part in parts:
+
+    stack = [(iter((payload,)), 0)]
+    visited_parts = 0
+    while stack:
+        siblings, depth = stack[-1]
+        try:
+            part = next(siblings)
+        except StopIteration:
+            stack.pop()
+            continue
+
+        visited_parts += 1
+        if visited_parts > MAX_INBOUND_MIME_PARTS:
+            return ""
         if not isinstance(part, dict):
             raise ValueError("invalid MIME part")
+
+        children = part.get("parts")
+        if children is not None:
+            if not isinstance(children, list):
+                raise ValueError("invalid MIME parts")
+            if children:
+                if depth < MAX_INBOUND_MIME_PART_DEPTH:
+                    stack.append((iter(children), depth + 1))
+                continue
+
         mime_type = part.get("mimeType")
         if not isinstance(mime_type, str):
             raise ValueError("invalid MIME type")
-        if mime_type not in {"text/plain", "text/html"}:
+        if mime_type.lower() not in {"text/plain", "text/html"}:
             continue
-        extracted = get_email_body(part)
+
+        body = part.get("body")
+        if body is None:
+            continue
+        if not isinstance(body, dict):
+            raise ValueError("invalid body")
+        encoded = body.get("data")
+        if encoded is None:
+            continue
+        if not isinstance(encoded, str):
+            raise ValueError("invalid body data")
+        padded = encoded + "=" * (-len(encoded) % 4)
+        extracted = base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
         if extracted:
             return extracted
     return ""
