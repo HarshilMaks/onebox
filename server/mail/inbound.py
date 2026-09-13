@@ -49,14 +49,14 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
             value = item.get("value")
             if not isinstance(name, str) or not isinstance(value, str):
                 raise ValueError("invalid header")
-            headers[name] = value
+            headers[name.lower()] = value
         return {
             "id": email_data.get("id", ""),
             "threadId": email_data.get("threadId", ""),
-            "subject": headers.get("Subject", "(No Subject)"),
-            "from": headers.get("From", "Unknown"),
-            "to": headers.get("To", "Unknown"),
-            "date": headers.get("Date", "Unknown"),
+            "subject": headers.get("subject", "(No Subject)"),
+            "from": headers.get("from", "Unknown"),
+            "to": headers.get("to", "Unknown"),
+            "date": headers.get("date", "Unknown"),
             "labels": email_data.get("labelIds", []),
             "body": get_email_body(payload),
         }

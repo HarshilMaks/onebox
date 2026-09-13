@@ -81,6 +81,43 @@ def test_oversized_inbound_body_is_a_terminal_parser_error():
     assert content == {"error": "Invalid message payload"}
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected_sender", "expected_subject"),
+    [
+        (
+            [
+                {"name": "from", "value": "no-reply@example.test"},
+                {"name": "subject", "value": "Status update"},
+            ],
+            "no-reply@example.test",
+            "Status update",
+        ),
+        (
+            [
+                {"name": "FrOm", "value": "sender@example.test"},
+                {"name": "sUbJeCt", "value": "Monthly newsletter"},
+            ],
+            "sender@example.test",
+            "Monthly newsletter",
+        ),
+    ],
+)
+def test_inbound_header_names_are_case_insensitive_for_triage_filters(headers, expected_sender, expected_subject):
+    content = mail.extract_email_content(
+        {
+            "payload": {
+                "headers": headers,
+                "mimeType": "text/plain",
+                "body": {"data": _encoded("body")},
+            }
+        }
+    )
+
+    assert content["from"] == expected_sender
+    assert content["subject"] == expected_subject
+    assert mail.should_process_email(content) is False
+
+
 def test_inbound_parser_traverses_nested_multipart_containers_to_first_nonempty_text_leaf():
     content = mail.extract_email_content(
         {
