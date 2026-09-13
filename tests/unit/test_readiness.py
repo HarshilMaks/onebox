@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from server import database, main
 from server.models import Base
@@ -89,6 +90,35 @@ async def test_readiness_requires_persisted_automation_watch_and_worker(monkeypa
 
     monkeypatch.setattr(readiness, "automation_status", ready_worker)
     assert await readiness.readiness_status() == (True, "ready")
+
+
+@pytest.mark.asyncio
+async def test_readiness_maps_automation_database_failure_to_unready_503(monkeypatch):
+    owner_id = uuid4()
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        SimpleNamespace(
+            requires_redis=False,
+            runs_automation_worker=True,
+            AUTOMATION_OWNER_ID=owner_id,
+            GMAIL_WORKER_LIVENESS_SECONDS=60,
+        ),
+    )
+
+    async def database_up():
+        return True
+
+    async def automation_database_failure(_owner_id):
+        raise SQLAlchemyError("automation status query failed")
+
+    monkeypatch.setattr(readiness, "database_schema_ready", database_up)
+    monkeypatch.setattr(readiness, "automation_status", automation_database_failure)
+
+    assert await readiness.readiness_status() == (False, "database_or_schema_unavailable")
+    response = await main.readyz()
+    assert response.status_code == 503
+    assert b"database_or_schema_unavailable" in response.body
 
 
 @pytest.mark.asyncio
