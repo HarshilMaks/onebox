@@ -165,6 +165,9 @@ make run-worker
 
 Interactive OpenAPI documentation is accessible at `http://localhost:8000/docs`.
 
+> [!NOTE]
+> Edit `user_config.yaml` to configure the agent's user profile, priority contacts, triage rules (`triage_no`, `triage_notify`, `triage_email`), and scheduling preferences. The `timezone` field (IANA format, e.g. `America/New_York`) sets the default timezone for all calendar tool operations.
+
 ---
 
 ## Configuration Reference
@@ -190,6 +193,10 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `DATABASE_POOL_SIZE` | No | `5` | Core connection pool size for SQLAlchemy. |
 | `DATABASE_MAX_OVERFLOW` | No | `5` | Maximum overflow connections for SQLAlchemy. |
 | `REDIS_TRUSTED_LOCAL_NETWORK` | No | `false` | Allows unencrypted Redis in production only if operating inside a private VPC. |
+| `PROVIDER_RETRY_MAX_ATTEMPTS` | No | `3` | Maximum retry attempts for safe reads and idempotent writes. |
+| `PROVIDER_RETRY_DEADLINE_SECONDS` | No | `10.0` | Wall-clock deadline bounding the entire retry sequence including wait intervals. Ambiguous writes are exempt. |
+| `PROVIDER_RETRY_INITIAL_SECONDS` | No | `0.25` | Initial exponential backoff base for provider retries. |
+| `PROVIDER_RETRY_MAX_SECONDS` | No | `2.0` | Maximum per-attempt backoff cap before jitter. |
 
 ### Authentication & Token Security
 
@@ -365,6 +372,7 @@ To prevent resource exhaustion and Denial of Service, the API enforces strict in
 - **Mail Pagination Limits:** Capped at 100 messages per page.
 - **Pub/Sub Push Envelopes:** Capped at `PUBSUB_MAX_ENVELOPE_BYTES` (64 KB default).
 - **OAuth Callback State & Code:** Capped at 512 and 4,096 characters respectively.
+- **Inbound Mail Bodies:** Truncated at 256 KB. MIME structure traversal is bounded to 512 parts and 32 nesting levels; messages exceeding either limit return an empty body rather than an error.
 
 ### Generational Mail Cache Policy
 Mail detail bodies are cached for **5 minutes**; folder views and search results are cached for **60 seconds**.
@@ -381,9 +389,10 @@ Tool access is governed by an immutable per-run server allowlist:
 
 ### Provider Retry, Identity & Retention Policy
 External Google API failures are classified into granular categories:
-- **Safe Retries:** Reads and idempotent writes execute with bounded exponential backoff, jitter, and a provider `Retry-After` floor.
+- **Safe Retries:** Reads and idempotent writes execute with bounded exponential backoff and full jitter, honoring a provider `Retry-After` floor. Quota errors (HTTP 429 and HTTP 403 with quota reasons) are included in the retryable category. Each retry sequence is bounded by both `PROVIDER_RETRY_MAX_ATTEMPTS` and `PROVIDER_RETRY_DEADLINE_SECONDS`; whichever limit is reached first stops the attempt.
 - **Single Dispatch:** Non-idempotent writes are executed exactly once. Ambiguous results transition to `reconciliation_required`.
 - **Authoritative Identity:** Persisted case-normalized Google email addresses define account ownership. OneBox fails closed if credentials point to a renamed or mismatched account.
+- **Watch Renewal Backoff:** Failed Gmail watch renewals are retried with exponential backoff using a per-mailbox `watch_renewal_next_attempt_at` cursor. Sustained failures surface in `/mail/agent/health` and the operations runbook.
 - **Data Retention:** Terminal pending actions are retained for **30 days**; terminal notification jobs and triage logs are retained for **14 days**. Expired rows are purged periodically by the worker.
 
 ---
