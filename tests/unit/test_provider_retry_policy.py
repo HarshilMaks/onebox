@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
+import httplib2
 import pytest
+from googleapiclient.errors import HttpError
 
 from server.integrations import google
 from server.routes import google_mail
@@ -17,6 +20,33 @@ def _retry_settings(*, attempts: int = 3, deadline: float = 30.0, provider_timeo
         PROVIDER_RETRY_MAX_SECONDS=4.0,
         PROVIDER_RETRY_DEADLINE_SECONDS=deadline,
     )
+
+
+def _google_http_error(*, status_code: int, reason: str) -> HttpError:
+    response = httplib2.Response({"status": str(status_code)})
+    content = json.dumps({"error": {"code": status_code, "errors": [{"reason": reason}]}}).encode()
+    return HttpError(response, content)
+
+
+@pytest.mark.parametrize("reason", ["quotaExceeded", "rateLimitExceeded", "userRateLimitExceeded"])
+def test_structured_403_quota_and_rate_limit_errors_are_retryable(reason):
+    translated = google._translate_google_error(_google_http_error(status_code=403, reason=reason))
+
+    assert isinstance(translated, google.GoogleOperationQuota)
+    classification = google.classify_google_error(translated, safety=google.GoogleOperationSafety.READ)
+    assert classification.category is google.GoogleErrorCategory.QUOTA
+    assert classification.retryable is True
+
+
+def test_structured_403_permission_error_remains_terminal():
+    translated = google._translate_google_error(
+        _google_http_error(status_code=403, reason="insufficientPermissions")
+    )
+
+    assert isinstance(translated, google.GoogleOperationAuthentication)
+    classification = google.classify_google_error(translated, safety=google.GoogleOperationSafety.READ)
+    assert classification.category is google.GoogleErrorCategory.AUTHENTICATION
+    assert classification.retryable is False
 
 
 @pytest.mark.asyncio

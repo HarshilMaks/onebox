@@ -8,6 +8,7 @@ pending-action reconciliation path rather than a blind retry.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import weakref
@@ -151,6 +152,62 @@ def _retry_after_seconds(response: Any) -> float | None:
         return max(0.0, (value - datetime.now(timezone.utc)).total_seconds())
 
 
+_QUOTA_OR_RATE_LIMIT_REASONS = frozenset(
+    {
+        "dailylimitexceeded",
+        "dailylimitexceededunreg",
+        "quotaexceeded",
+        "ratelimitexceeded",
+        "resourceexhausted",
+        "userratelimitexceeded",
+    }
+)
+
+
+def _normalized_google_error_reason(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    return normalized or None
+
+
+def _google_http_error_reasons(error: HttpError) -> set[str]:
+    """Extract normalized structured reasons without trusting an error body shape."""
+    content = getattr(error, "content", None)
+    if isinstance(content, bytes):
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return set()
+    if not isinstance(content, str):
+        return set()
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return set()
+    error_payload = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error_payload, dict):
+        return set()
+
+    structured_errors: list[dict[str, Any]] = [error_payload]
+    for field in ("errors", "details"):
+        values = error_payload.get(field)
+        if isinstance(values, list):
+            structured_errors.extend(value for value in values if isinstance(value, dict))
+
+    reasons: set[str] = set()
+    for item in structured_errors:
+        for field in ("reason", "status"):
+            normalized = _normalized_google_error_reason(item.get(field))
+            if normalized is not None:
+                reasons.add(normalized)
+    return reasons
+
+
+def _is_google_quota_or_rate_limit_error(error: HttpError) -> bool:
+    return bool(_google_http_error_reasons(error) & _QUOTA_OR_RATE_LIMIT_REASONS)
+
+
 class DeadlineGoogleAuthRequest(GoogleAuthRequest):
     """Clamp google-auth requests to the configured provider transport deadline."""
 
@@ -203,6 +260,8 @@ def _translate_google_error(error: BaseException) -> GoogleProviderError:
     if isinstance(error, HttpError):
         status_code = getattr(getattr(error, "resp", None), "status", None)
         retry_after = _retry_after_seconds(getattr(error, "resp", None))
+        if status_code == 403 and _is_google_quota_or_rate_limit_error(error):
+            return GoogleOperationQuota(status_code, retry_after)
         if status_code in {401, 403}:
             return GoogleOperationAuthentication(status_code)
         if status_code == 429:
