@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from asyncio import CancelledError
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ from server.agent_tools import (
 )
 from server.config import PROJECT_ROOT
 from server.integrations.llm import LlmOperationInternal, LlmOperationTimeout, LlmOperationUnavailable
+from tools.llm_tools import validate_tool_arguments
 
 
 logger = __import__("logging").getLogger(__name__)
@@ -117,6 +119,33 @@ def _candidate_text(response: Any) -> str:
             return text
     text = getattr(response, "text", None)
     return text if isinstance(text, str) and text else "I could not generate a response."
+
+
+def _coalesce_first_stream_function_call(function_calls: list[Any]) -> tuple[Any, dict[str, object]] | None:
+    """Merge same-ID streamed fragments while retaining the first call object."""
+    selected = function_calls[0]
+    selected_id = getattr(selected, "id", None)
+    selected_name = getattr(selected, "name", None)
+    fragments = function_calls if isinstance(selected_id, str) and selected_id else [selected]
+    assembled_args: dict[str, object] = {}
+    for fragment in fragments:
+        if fragment is not selected and getattr(fragment, "id", None) != selected_id:
+            continue
+        fragment_name = getattr(fragment, "name", None)
+        if (
+            fragment is not selected
+            and isinstance(fragment_name, str)
+            and fragment_name
+            and fragment_name != selected_name
+        ):
+            return None
+        fragment_args = getattr(fragment, "args", None)
+        if fragment_args is None:
+            continue
+        if not isinstance(fragment_args, Mapping):
+            return None
+        assembled_args.update(fragment_args)
+    return selected, assembled_args
 
 
 class ExecutiveAgent(Agent):
@@ -363,7 +392,11 @@ class GeneralAgentStreamer(Agent):
             if not policy.is_primary_mutation(name) or policy.max_primary_mutations < 1:
                 yield "error", "The requested tool is not available for this run.", "tool_not_authorized"
                 return
-            args = dict(getattr(function_call, "args", None) or {})
+            assembled_call = _coalesce_first_stream_function_call(function_calls)
+            if assembled_call is None:
+                yield "error", "The requested tool could not complete. Please try again.", "tool_unavailable"
+                return
+            function_call, args = assembled_call
             args.pop("command_key", None)
             hidden_kwargs = {
                 "command_key": command_key_for_tool_call(
@@ -372,6 +405,9 @@ class GeneralAgentStreamer(Agent):
                     function_call=function_call,
                 )
             }
+            if not validate_tool_arguments(self.available_python_tools[name], args, hidden_kwargs):
+                yield "error", "The requested tool could not complete. Please try again.", "tool_unavailable"
+                return
             try:
                 result = self.available_python_tools[name](**args, **hidden_kwargs)
                 if not hasattr(result, "__await__"):

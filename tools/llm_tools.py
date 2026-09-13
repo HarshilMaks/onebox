@@ -1,7 +1,9 @@
 import asyncio
 import logging
+from collections.abc import Callable, Mapping
 from datetime import datetime, time as datetime_time, timezone
-from typing import Dict, List, Optional
+from inspect import signature
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from googleapiclient.discovery import Resource
@@ -22,6 +24,19 @@ from server.services.pending_actions import (
 from tools.utils import create_raw_message, format_datetime_with_timezone
 
 logger = logging.getLogger(__name__)
+
+
+def validate_tool_arguments(
+    tool: Callable[..., Any],
+    args: Mapping[str, object],
+    hidden_kwargs: Mapping[str, object],
+) -> bool:
+    """Return whether a bound registered tool can accept assembled keyword arguments."""
+    try:
+        signature(tool).bind(**args, **hidden_kwargs)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _action_request_response(action: Dict[str, object]) -> Dict[str, object]:

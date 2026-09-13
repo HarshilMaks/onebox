@@ -187,6 +187,128 @@ async def test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mut
     assert events[0][2] == "tool_not_authorized"
 
 
+@pytest.mark.asyncio
+async def test_stream_coalesces_selected_call_fragments_before_single_execution(monkeypatch):
+    calls = []
+
+    async def fake_send_email(*_args, **kwargs):
+        calls.append(kwargs)
+        return {"status": "pending_approval", "action_id": "pending-fragmented"}
+
+    class Provider:
+        async def iter_stream(self, **_kwargs):
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "send_email",
+                                        {"recipient_email": "recipient@example.test"},
+                                        "fragmented-call",
+                                    )
+                                )
+                            ]
+                        )
+                    )
+                ]
+            )
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "send_email",
+                                        {"subject": "Subject", "email_body": "Body"},
+                                        "fragmented-call",
+                                    )
+                                ),
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "create_task",
+                                        {"title": "Must not run", "notes": "Later call"},
+                                        "later-call",
+                                    )
+                                ),
+                            ]
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
+    streamer = GeneralAgentStreamer("owner", provider=Provider())
+    events = [event async for event in streamer.run("send a fragmented email", current_user_email="owner@example.test")]
+
+    assert len(calls) == 1
+    assert calls[0]["recipient_email"] == "recipient@example.test"
+    assert calls[0]["subject"] == "Subject"
+    assert calls[0]["email_body"] == "Body"
+    assert isinstance(calls[0]["command_key"], str)
+    assert events == [("tool_result", "Approval required. Approve action pending-fragmented to continue.", None)]
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_invalid_assembled_call_without_executing_tool(monkeypatch):
+    calls = []
+
+    async def fake_send_email(
+        _owner_id,
+        _current_user_email,
+        recipient_email: str,
+        subject: str,
+        email_body: str,
+        *,
+        command_key: str,
+    ):
+        calls.append(
+            {
+                "recipient_email": recipient_email,
+                "subject": subject,
+                "email_body": email_body,
+                "command_key": command_key,
+            }
+        )
+        return {"status": "pending_approval", "action_id": "unexpected"}
+
+    class Provider:
+        async def iter_stream(self, **_kwargs):
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "send_email",
+                                        {"recipient_email": "recipient@example.test"},
+                                        "invalid-fragmented-call",
+                                    )
+                                ),
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "send_email",
+                                        {"subject": "Missing body"},
+                                        "invalid-fragmented-call",
+                                    )
+                                ),
+                            ]
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
+    streamer = GeneralAgentStreamer("owner", provider=Provider())
+    events = [event async for event in streamer.run("send an invalid email", current_user_email="owner@example.test")]
+
+    assert calls == []
+    assert events == [("error", "The requested tool could not complete. Please try again.", "tool_unavailable")]
+
+
 def test_profile_is_cwd_independent_and_time_is_rendered_per_request(monkeypatch, tmp_path: Path):
     profile = tmp_path / "user_config.yaml"
     profile.write_text("full_name: Owner\ntitle: Lead\ntimezone: America/New_York\n", encoding="utf-8")
