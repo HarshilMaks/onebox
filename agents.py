@@ -121,9 +121,8 @@ def _candidate_text(response: Any) -> str:
     return text if isinstance(text, str) and text else "I could not generate a response."
 
 
-def _coalesce_first_stream_function_call(function_calls: list[Any]) -> tuple[Any, dict[str, object]] | None:
-    """Merge same-ID streamed fragments while retaining the first call object."""
-    selected = function_calls[0]
+def _coalesce_stream_function_call(selected: Any, function_calls: list[Any]) -> tuple[Any, dict[str, object]] | None:
+    """Merge same-ID streamed fragments while retaining the selected call object."""
     selected_id = getattr(selected, "id", None)
     selected_name = getattr(selected, "name", None)
     fragments = function_calls if isinstance(selected_id, str) and selected_id else [selected]
@@ -381,18 +380,27 @@ class GeneralAgentStreamer(Agent):
 
             if not function_calls:
                 return
-            # A streamed model response may contain more than one function call;
-            # execute only the first policy-authorized call. Later calls cannot
-            # broaden authorization or produce a second mutation.
-            function_call = function_calls[0]
+            # A streamed model response may contain multiple function calls;
+            # execute only the first policy-authorized primary mutation. Earlier
+            # disallowed calls cannot suppress a later eligible call, and later
+            # calls cannot broaden authorization or produce a second mutation.
+            function_call = next(
+                (
+                    call
+                    for call in function_calls
+                    if isinstance((call_name := getattr(call, "name", "")), str)
+                    and policy.allows(call_name)
+                    and call_name in self.available_python_tools
+                    and policy.is_primary_mutation(call_name)
+                    and policy.max_primary_mutations >= 1
+                ),
+                None,
+            )
+            if function_call is None:
+                yield "error", "The requested tool is not available for this run.", "tool_not_authorized"
+                return
             name = getattr(function_call, "name", "")
-            if not isinstance(name, str) or not policy.allows(name) or name not in self.available_python_tools:
-                yield "error", "The requested tool is not available for this run.", "tool_not_authorized"
-                return
-            if not policy.is_primary_mutation(name) or policy.max_primary_mutations < 1:
-                yield "error", "The requested tool is not available for this run.", "tool_not_authorized"
-                return
-            assembled_call = _coalesce_first_stream_function_call(function_calls)
+            assembled_call = _coalesce_stream_function_call(function_call, function_calls)
             if assembled_call is None:
                 yield "error", "The requested tool could not complete. Please try again.", "tool_unavailable"
                 return

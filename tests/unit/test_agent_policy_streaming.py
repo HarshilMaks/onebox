@@ -188,6 +188,48 @@ async def test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mut
 
 
 @pytest.mark.asyncio
+async def test_stream_skips_disallowed_call_before_first_eligible_mutation(monkeypatch):
+    sent = []
+
+    async def fake_send_email(*_args, **kwargs):
+        sent.append(kwargs)
+        return {"status": "pending_approval", "action_id": "eligible-pending"}
+
+    class Provider:
+        async def iter_stream(self, **_kwargs):
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(function_call=_function_call("create_event", {}, "disallowed-call")),
+                                SimpleNamespace(
+                                    function_call=_function_call(
+                                        "send_email",
+                                        {
+                                            "recipient_email": "recipient@example.test",
+                                            "subject": "Subject",
+                                            "email_body": "Body",
+                                        },
+                                        "eligible-call",
+                                    )
+                                ),
+                            ]
+                        )
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(agent_tools, "send_email", fake_send_email)
+    streamer = GeneralAgentStreamer("owner", provider=Provider())
+    events = [event async for event in streamer.run("send email after a disallowed call", current_user_email="owner@example.test")]
+
+    assert len(sent) == 1
+    assert sent[0]["recipient_email"] == "recipient@example.test"
+    assert events == [("tool_result", "Approval required. Approve action eligible-pending to continue.", None)]
+
+
+@pytest.mark.asyncio
 async def test_stream_coalesces_selected_call_fragments_before_single_execution(monkeypatch):
     calls = []
 
