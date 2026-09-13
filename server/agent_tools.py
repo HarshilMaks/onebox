@@ -145,6 +145,7 @@ def bind_executive_tools(
     calendar_service: Optional[Resource],
     tasks_service: Optional[Resource],
     current_user_email: Optional[str],
+    target_timezone: str = "UTC",
 ) -> tuple[dict[str, Callable[..., Any]], list[Tool]]:
     """Bind only route-authorized tools whose account services are available."""
     bindings: dict[str, Callable[..., Any]] = {}
@@ -161,7 +162,11 @@ def bind_executive_tools(
         bindings.update(
             {
                 AgentTool.CREATE_EVENT.value: partial(create_event, user_id),
-                AgentTool.GET_CALENDAR_EVENTS.value: partial(get_calendar_events, calendar_service),
+                AgentTool.GET_CALENDAR_EVENTS.value: partial(
+                    get_calendar_events,
+                    calendar_service,
+                    target_timezone=target_timezone,
+                ),
             }
         )
     if tasks_service:

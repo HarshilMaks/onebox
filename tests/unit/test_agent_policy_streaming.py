@@ -457,3 +457,66 @@ async def test_sse_disconnect_closes_agent_iterator_and_heartbeat_is_a_comment(m
     )
     with pytest.raises(StopAsyncIteration):
         await anext(disconnected_response.body_iterator)
+
+
+@pytest.mark.asyncio
+async def test_executive_calendar_calls_default_to_profile_timezone_and_allow_override(monkeypatch, tmp_path: Path):
+    profile = tmp_path / "user_config.yaml"
+    profile.write_text("timezone: America/New_York\n", encoding="utf-8")
+    calls = []
+
+    async def fake_get_calendar_events(_calendar_service, date_strs, target_timezone):
+        calls.append((date_strs, target_timezone))
+        return {date_str: "No events found for this day." for date_str in date_strs}
+
+    class Provider:
+        def __init__(self) -> None:
+            self.generate_calls = 0
+
+        async def generate(self, **_kwargs):
+            self.generate_calls += 1
+            if self.generate_calls == 1:
+                return SimpleNamespace(
+                    candidates=[
+                        SimpleNamespace(
+                            content=SimpleNamespace(
+                                parts=[
+                                    SimpleNamespace(
+                                        function_call=_function_call(
+                                            AgentTool.GET_CALENDAR_EVENTS.value,
+                                            {"date_strs": ["13-09-2026"]},
+                                            "profile-timezone",
+                                        )
+                                    ),
+                                    SimpleNamespace(
+                                        function_call=_function_call(
+                                            AgentTool.GET_CALENDAR_EVENTS.value,
+                                            {
+                                                "date_strs": ["14-09-2026"],
+                                                "target_timezone": "Europe/London",
+                                            },
+                                            "explicit-timezone",
+                                        )
+                                    ),
+                                ]
+                            )
+                        )
+                    ]
+                )
+            return SimpleNamespace(
+                candidates=[SimpleNamespace(content=SimpleNamespace(parts=[SimpleNamespace(text="ok")]))],
+                text="ok",
+            )
+
+    monkeypatch.setattr(agent_tools, "get_calendar_events", fake_get_calendar_events)
+    policy = AgentToolPolicy(
+        run_kind=AgentRunKind.INTERACTIVE_EXECUTIVE,
+        allowed_tools=frozenset({AgentTool.GET_CALENDAR_EVENTS}),
+    )
+    agent = ExecutiveAgent("owner", provider=Provider(), config_path=profile)
+
+    assert await agent.run("Show my calendar", calendar_service=object(), policy=policy) == "ok"
+    assert calls == [
+        (["13-09-2026"], "America/New_York"),
+        (["14-09-2026"], "Europe/London"),
+    ]

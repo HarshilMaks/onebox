@@ -172,6 +172,7 @@ class ExecutiveAgent(Agent):
         calendar_service: Optional[Resource],
         tasks_service: Optional[Resource],
         current_user_email: Optional[str],
+        target_timezone: str = "UTC",
     ) -> list:
         """Delegate trusted callable construction to the server tool registry."""
         self.available_python_tools, tool_objects = bind_executive_tools(
@@ -181,6 +182,7 @@ class ExecutiveAgent(Agent):
             calendar_service=calendar_service,
             tasks_service=tasks_service,
             current_user_email=current_user_email,
+            target_timezone=target_timezone,
         )
         return tool_objects
 
@@ -253,7 +255,8 @@ class ExecutiveAgent(Agent):
         self._tool_command_keys = {}
         self._mutation_count = 0
         profile = _profile_from_config(load_config(self._config_path))
-        now = _now_in_timezone(self._clock, _profile_timezone(profile))
+        profile_timezone = _profile_timezone(profile)
+        now = _now_in_timezone(self._clock, profile_timezone)
         prompt = EXECUTIVE_AGENT_PROMPT.format(
             user_full_name=profile.full_name,
             user_title=profile.title,
@@ -270,6 +273,7 @@ class ExecutiveAgent(Agent):
             calendar_service=calendar_service,
             tasks_service=tasks_service,
             current_user_email=current_user_email,
+            target_timezone=profile_timezone.key,
         )
         history: list[Content] = [Content(parts=[Part(text=input_query)], role="user")]
         config = GenerateContentConfig(
