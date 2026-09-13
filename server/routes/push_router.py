@@ -117,6 +117,8 @@ async def receive_gmail_notification(
         envelope = parse_notification_envelope(await _bounded_body(request), settings.PUBSUB_SUBSCRIPTION)
         inserted = await enqueue_notification(envelope, settings.AUTOMATION_OWNER_ID)
         logger.info("Persisted Gmail notification job inserted=%s", inserted)
+    except HTTPException:
+        raise
     except NotificationValidationError as exc:
         raise HTTPException(status_code=400, detail="Invalid Gmail notification") from exc
     except AutomationBaselineUnavailable:

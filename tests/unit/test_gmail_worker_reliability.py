@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from server.routes import push_router
 from server.mail import inbound as mail
@@ -51,6 +52,42 @@ async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
 
     await mail_notifications.run_notification_worker(stop_event, uuid4())
     assert calls == 2
+
+
+class _PushRequest:
+    def __init__(self, headers: dict[str, str], chunks: tuple[bytes, ...] = ()) -> None:
+        self.headers = headers
+        self._chunks = chunks
+
+    async def stream(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "chunks", "expected_status"),
+    [
+        ({"content-length": "not-a-number"}, (), 400),
+        ({}, (b"12345",), 413),
+    ],
+)
+async def test_notification_body_validation_preserves_client_error_status(monkeypatch, headers, chunks, expected_status):
+    monkeypatch.setattr(
+        push_router,
+        "settings",
+        SimpleNamespace(
+            AUTOMATION_ENABLED=True,
+            AUTOMATION_OWNER_ID=uuid4(),
+            PUBSUB_MAX_ENVELOPE_BYTES=4,
+            PUBSUB_SUBSCRIPTION="projects/test/subscriptions/onebox",
+        ),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await push_router.receive_gmail_notification(_PushRequest(headers, chunks), _push_claims={})
+
+    assert raised.value.status_code == expected_status
 
 
 def test_parser_error_sentinel_is_not_analyzable_mail():
