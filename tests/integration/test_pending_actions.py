@@ -481,3 +481,69 @@ async def test_gmail_reconciliation_requires_unique_marker_across_all_pages(
     assert outcome.status == "reconciliation_required"
     assert outcome.error_code == "gmail_marker_conflict"
     assert outcome.evidence == {"match_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_retention_cleanup_removes_only_old_terminal_records(pending_db, owner_id):
+    from server.models import GmailNotificationJob, GmailTriageWork
+    from server.services.retention import cleanup_retained_records
+
+    now = pending_actions._now()
+    old = now - timedelta(days=31)
+    old_action = await create_pending_action(
+        str(owner_id), ACTION_SEND_EMAIL, email_payload(), command_key="command-key-retention-old"
+    )
+    reconciliation_action = await create_pending_action(
+        str(owner_id), ACTION_SEND_EMAIL, email_payload(), command_key="command-key-retention-reconciliation"
+    )
+    async with pending_db() as session:
+        old_row = await session.get(PendingAction, old_action["id"])
+        old_row.status = "succeeded"
+        old_row.processed_at = old
+        reconciliation_row = await session.get(PendingAction, reconciliation_action["id"])
+        reconciliation_row.status = "reconciliation_required"
+        reconciliation_row.processed_at = old
+        session.add_all(
+            [
+                GmailNotificationJob(
+                    pubsub_message_id="retention-old-job",
+                    mailbox_email="owner@example.com",
+                    history_id=1,
+                    state="succeeded",
+                    processed_at=old,
+                ),
+                GmailNotificationJob(
+                    pubsub_message_id="retention-recent-job",
+                    mailbox_email="owner@example.com",
+                    history_id=2,
+                    state="succeeded",
+                    processed_at=now,
+                ),
+                GmailTriageWork(
+                    mailbox_email="owner@example.com",
+                    message_id="retention-old-triage",
+                    source_history_id=1,
+                    state="succeeded",
+                    processed_at=old,
+                ),
+                GmailTriageWork(
+                    mailbox_email="owner@example.com",
+                    message_id="retention-recent-triage",
+                    source_history_id=2,
+                    state="noop",
+                    processed_at=now,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with pending_db() as session:
+        result = await cleanup_retained_records(session, now=now)
+        await session.commit()
+        assert result.pending_actions == 1
+        assert result.notification_jobs == 1
+        assert result.triage_work == 1
+        assert await session.get(PendingAction, old_action["id"]) is None
+        assert await session.get(PendingAction, reconciliation_action["id"]) is not None
+        assert await session.scalar(text("SELECT count(*) FROM gmail_notification_jobs")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM gmail_triage_work")) == 1

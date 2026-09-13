@@ -1,0 +1,2280 @@
+{
+  "components": {
+    "schemas": {
+      "AgentConnectionStatus": {
+        "enum": [
+          "connected",
+          "not_connected"
+        ],
+        "title": "AgentConnectionStatus",
+        "type": "string"
+      },
+      "AgentQuery": {
+        "properties": {
+          "input": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Input",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "title": "AgentQuery",
+        "type": "object"
+      },
+      "AgentStatusResponse": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "is_gmail_connected": {
+            "title": "Is Gmail Connected",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentConnectionStatus"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "is_gmail_connected",
+          "status"
+        ],
+        "title": "AgentStatusResponse",
+        "type": "object"
+      },
+      "AgentStreamEvent": {
+        "description": "One JSON payload emitted in a general-agent SSE data frame.\n\n``error_code`` is present only for a terminal ``error`` event and is safe\nfor client-side branching. ``content`` is always safe to display.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "event": {
+            "$ref": "#/components/schemas/AgentStreamEventType"
+          }
+        },
+        "required": [
+          "event",
+          "content"
+        ],
+        "title": "AgentStreamEvent",
+        "type": "object"
+      },
+      "AgentStreamEventType": {
+        "description": "Terminal and non-terminal event names emitted in agent SSE frames.",
+        "enum": [
+          "token",
+          "tool_result",
+          "error",
+          "done"
+        ],
+        "title": "AgentStreamEventType",
+        "type": "string"
+      },
+      "AgentSuccessResponse": {
+        "description": "Standard envelope for a successful non-streaming agent response.",
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "AgentSuccessResponse",
+        "type": "object"
+      },
+      "AutomationAvailability": {
+        "enum": [
+          "durable_worker_enabled",
+          "disabled"
+        ],
+        "title": "AutomationAvailability",
+        "type": "string"
+      },
+      "CheckInboxResponse": {
+        "properties": {
+          "inbox_message_count_estimate": {
+            "title": "Inbox Message Count Estimate",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InboxCheckStatus"
+          }
+        },
+        "required": [
+          "status",
+          "inbox_message_count_estimate"
+        ],
+        "title": "CheckInboxResponse",
+        "type": "object"
+      },
+      "EmailDetail": {
+        "description": "Complete mail detail with plain text and optional sanitized HTML.\n\n``body`` is always text. Clients may render ``sanitized_html`` only when\nthey intentionally opt into the strict server-side sanitization policy.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "cc": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cc",
+            "type": "array"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_read": {
+            "title": "Is Read",
+            "type": "boolean"
+          },
+          "is_starred": {
+            "title": "Is Starred",
+            "type": "boolean"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "sanitized_html": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sanitized Html"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          },
+          "snippet": {
+            "default": "",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threadid"
+          },
+          "to": {
+            "items": {
+              "type": "string"
+            },
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "sender",
+          "is_read",
+          "is_starred",
+          "body"
+        ],
+        "title": "EmailDetail",
+        "type": "object"
+      },
+      "EmailDraft": {
+        "properties": {
+          "body": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "subject": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "items": {
+              "format": "email",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "title": "EmailDraft",
+        "type": "object"
+      },
+      "EmailListItem": {
+        "description": "Summary data returned by inbox, folder, and search endpoints.",
+        "properties": {
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_read": {
+            "title": "Is Read",
+            "type": "boolean"
+          },
+          "is_starred": {
+            "title": "Is Starred",
+            "type": "boolean"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          },
+          "snippet": {
+            "default": "",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threadid"
+          },
+          "to": {
+            "items": {
+              "type": "string"
+            },
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "sender",
+          "is_read",
+          "is_starred"
+        ],
+        "title": "EmailListItem",
+        "type": "object"
+      },
+      "EmailPage": {
+        "properties": {
+          "emails": {
+            "items": {
+              "$ref": "#/components/schemas/EmailListItem"
+            },
+            "title": "Emails",
+            "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "emails"
+        ],
+        "title": "EmailPage",
+        "type": "object"
+      },
+      "GlobalGmailHealthResponse": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "gmail_service_status": {
+            "$ref": "#/components/schemas/GlobalGmailServiceStatus"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GlobalGmailHealthStatus"
+          }
+        },
+        "required": [
+          "status",
+          "detail",
+          "gmail_service_status"
+        ],
+        "title": "GlobalGmailHealthResponse",
+        "type": "object"
+      },
+      "GlobalGmailHealthStatus": {
+        "enum": [
+          "unavailable",
+          "healthy",
+          "degraded"
+        ],
+        "title": "GlobalGmailHealthStatus",
+        "type": "string"
+      },
+      "GlobalGmailServiceStatus": {
+        "enum": [
+          "unavailable",
+          "ready",
+          "degraded"
+        ],
+        "title": "GlobalGmailServiceStatus",
+        "type": "string"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "HealthStatus": {
+        "enum": [
+          "healthy"
+        ],
+        "title": "HealthStatus",
+        "type": "string"
+      },
+      "InboxCheckStatus": {
+        "enum": [
+          "checked"
+        ],
+        "title": "InboxCheckStatus",
+        "type": "string"
+      },
+      "MailMutationAction": {
+        "enum": [
+          "set"
+        ],
+        "title": "MailMutationAction",
+        "type": "string"
+      },
+      "MailMutationResponse": {
+        "description": "Stable response for a single-email mutation.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MailMutationAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MailMutationStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "MailMutationResponse",
+        "type": "object"
+      },
+      "MailMutationStatus": {
+        "enum": [
+          "marked as read",
+          "marked as unread",
+          "moved to trash",
+          "restored from trash",
+          "permanently deleted",
+          "starred",
+          "unstarred"
+        ],
+        "title": "MailMutationStatus",
+        "type": "string"
+      },
+      "OAuthStartResponse": {
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url",
+          "state"
+        ],
+        "title": "OAuthStartResponse",
+        "type": "object"
+      },
+      "PendingActionResponse": {
+        "description": "Immutable, owner-bound external action awaiting or reflecting approval.",
+        "properties": {
+          "action_type": {
+            "$ref": "#/components/schemas/PendingActionType"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "attempt_count": {
+            "default": 0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "object"
+          },
+          "payload_hash": {
+            "title": "Payload Hash",
+            "type": "string"
+          },
+          "processed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed At"
+          },
+          "reconciliation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Reason"
+          },
+          "reconciliation_required_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Required At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingActionStatus"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action_type",
+          "payload",
+          "payload_hash",
+          "summary",
+          "status",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "PendingActionResponse",
+        "type": "object"
+      },
+      "PendingActionStatus": {
+        "description": "Persisted pending-action lifecycle states.",
+        "enum": [
+          "pending",
+          "processing",
+          "succeeded",
+          "failed",
+          "rejected",
+          "expired",
+          "reconciliation_required"
+        ],
+        "title": "PendingActionStatus",
+        "type": "string"
+      },
+      "PendingActionType": {
+        "description": "Provider effects that are always represented by a pending action.",
+        "enum": [
+          "send_email",
+          "send_reply",
+          "create_event",
+          "create_task"
+        ],
+        "title": "PendingActionType",
+        "type": "string"
+      },
+      "PublicErrorResponse": {
+        "description": "Stable safe HTTP error envelope shared by all routes.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "detail"
+        ],
+        "title": "PublicErrorResponse",
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "global_gmail_service": {
+            "$ref": "#/components/schemas/AutomationAvailability"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RootStatus"
+          }
+        },
+        "required": [
+          "status",
+          "global_gmail_service"
+        ],
+        "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "RootStatus": {
+        "enum": [
+          "ok"
+        ],
+        "title": "RootStatus",
+        "type": "string"
+      },
+      "SaveDraftResponse": {
+        "properties": {
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SaveDraftStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "draft_id"
+        ],
+        "title": "SaveDraftResponse",
+        "type": "object"
+      },
+      "SaveDraftStatus": {
+        "enum": [
+          "draft saved",
+          "draft updated"
+        ],
+        "title": "SaveDraftStatus",
+        "type": "string"
+      },
+      "SendEmailResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SendEmailStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "SendEmailResponse",
+        "type": "object"
+      },
+      "SendEmailStatus": {
+        "enum": [
+          "sent"
+        ],
+        "title": "SendEmailStatus",
+        "type": "string"
+      },
+      "StarStateUpdate": {
+        "description": "Desired final star state for an idempotent Gmail mutation.",
+        "properties": {
+          "starred": {
+            "title": "Starred",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "starred"
+        ],
+        "title": "StarStateUpdate",
+        "type": "object"
+      },
+      "VerifyAndCreateEntryResponse": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "user_id",
+          "email"
+        ],
+        "title": "VerifyAndCreateEntryResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Hexel Onebox Server",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/": {
+      "get": {
+        "description": "Report process health and whether the durable automation worker is enabled.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Root"
+      }
+    },
+    "/actions/{action_id}": {
+      "get": {
+        "operationId": "get_pending_action_endpoint_actions__action_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Pending Action Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/actions/{action_id}/approve": {
+      "post": {
+        "description": "Approve and execute exactly one immutable action owned by this JWT user.",
+        "operationId": "approve_pending_action_endpoint_actions__action_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Pending Action Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/actions/{action_id}/reconcile": {
+      "post": {
+        "description": "Reconcile an ambiguous write using deterministic provider markers only.",
+        "operationId": "reconcile_pending_action_endpoint_actions__action_id__reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reconcile Pending Action Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/actions/{action_id}/reject": {
+      "post": {
+        "operationId": "reject_pending_action_endpoint_actions__action_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Action Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reject Pending Action Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/agent/oauth/callback": {
+      "get": {
+        "description": "Exchange a one-time, owner-bound OAuth callback for stored credentials.",
+        "operationId": "oauth_callback_agent_oauth_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Oauth Callback",
+        "tags": [
+          "Agent auth"
+        ]
+      }
+    },
+    "/agent/oauth/start": {
+      "get": {
+        "description": "Start a one-time OAuth flow bound to the authenticated user and email.",
+        "operationId": "start_oauth_agent_oauth_start_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Oauth",
+        "tags": [
+          "Agent auth"
+        ]
+      }
+    },
+    "/agent/status": {
+      "get": {
+        "operationId": "get_agent_status_agent_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Agent Status",
+        "tags": [
+          "Agent auth"
+        ]
+      }
+    },
+    "/agent/verify_and_create_entry": {
+      "post": {
+        "description": "Create an optional pending token row for the authenticated user.",
+        "operationId": "verify_and_create_agent_entry_agent_verify_and_create_entry_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyAndCreateEntryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify And Create Agent Entry",
+        "tags": [
+          "Agent auth"
+        ]
+      }
+    },
+    "/executive/": {
+      "post": {
+        "operationId": "invoke_executive_agent_endpoint_executive__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSuccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Invoke Executive Agent Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/generate-content/": {
+      "post": {
+        "operationId": "invoke_general_agent_endpoint_generate_content__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSuccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Invoke General Agent Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/generate-stream/": {
+      "post": {
+        "description": "Stream structured, user-safe agent events as JSON SSE data frames.",
+        "operationId": "invoke_general_agent_stream_endpoint_generate_stream__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "example": "data: {\"event\":\"token\",\"content\":\"Hello\"}\\n\\n",
+                "schema": {
+                  "format": "event-stream",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A text/event-stream response. Each non-comment data frame is JSON matching AgentStreamEvent."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Invoke General Agent Stream Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
+      }
+    },
+    "/livez": {
+      "get": {
+        "description": "Dependency-free process liveness probe.",
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Livez"
+      }
+    },
+    "/mail/agent/check-inbox": {
+      "post": {
+        "description": "Retire process-local manual processing in favor of durable history jobs.",
+        "operationId": "check_inbox_mail_agent_check_inbox_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check Inbox",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/agent/health": {
+      "get": {
+        "description": "Expose durable automation state without mailbox content.",
+        "operationId": "health_check_mail_agent_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalGmailHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Health Check",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/agent/status": {
+      "get": {
+        "description": "Return safe cursor/watch/queue observability for the configured operator.",
+        "operationId": "automation_status_endpoint_mail_agent_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Automation Status Endpoint",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/check-inbox": {
+      "post": {
+        "operationId": "check_inbox_api_mail_check_inbox_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckInboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check Inbox Api",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/drafts": {
+      "post": {
+        "operationId": "save_draft_api_mail_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveDraftResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Draft Api",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails": {
+      "get": {
+        "operationId": "fetch_emails_mail_emails_get",
+        "parameters": [
+          {
+            "description": "Folder: inbox, sent, spam, trash, starred, all",
+            "in": "query",
+            "name": "folder",
+            "required": false,
+            "schema": {
+              "default": "inbox",
+              "description": "Folder: inbox, sent, spam, trash, starred, all",
+              "maxLength": 32,
+              "minLength": 1,
+              "title": "Folder",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Max number of emails per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Max number of emails per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Gmail pagination token",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Gmail pagination token",
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fetch Emails",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}": {
+      "delete": {
+        "operationId": "delete_email_mail_emails__email_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Email",
+        "tags": [
+          "Email-Operations"
+        ]
+      },
+      "get": {
+        "operationId": "fetch_email_by_id_mail_emails__email_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Fetch Email By Id",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}/read": {
+      "post": {
+        "operationId": "mark_as_read_mail_emails__email_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark As Read",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}/restore": {
+      "post": {
+        "operationId": "restore_from_trash_mail_emails__email_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore From Trash",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}/star": {
+      "post": {
+        "description": "Set the desired star label exactly; no read-then-toggle race exists.",
+        "operationId": "set_star_state_mail_emails__email_id__star_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StarStateUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Star State",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}/trash": {
+      "post": {
+        "operationId": "move_to_trash_mail_emails__email_id__trash_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Move To Trash",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/emails/{email_id}/unread": {
+      "post": {
+        "operationId": "mark_as_unread_mail_emails__email_id__unread_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Email Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark As Unread",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/health": {
+      "get": {
+        "operationId": "health_check_mail_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Health Check",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/notifications": {
+      "post": {
+        "description": "Validate and commit one notification job before acknowledging Pub/Sub.",
+        "operationId": "receive_gmail_notification_mail_notifications_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Receive Gmail Notification",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/renew-watch": {
+      "post": {
+        "description": "Attempt singleton-leased watch renewal; no mailbox-wide stop is issued.",
+        "operationId": "renew_watch_mail_renew_watch_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Renew Watch",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/search": {
+      "get": {
+        "operationId": "search_endpoint_mail_search_get",
+        "parameters": [
+          {
+            "description": "Gmail search query string",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "Gmail search query string",
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Max number of results per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Max number of results per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Gmail pagination token",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Gmail pagination token",
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Search Endpoint",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/mail/send": {
+      "post": {
+        "operationId": "send_email_api_mail_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendEmailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Send Email Api",
+        "tags": [
+          "Email-Operations"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Dependency/schema-aware readiness probe; never calls Google APIs.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "summary": "Readyz"
+      }
+    }
+  }
+}

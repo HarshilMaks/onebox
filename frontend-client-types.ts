@@ -78,6 +78,11 @@ export interface MailMutationResponse {
   action?: string | null;
 }
 
+/** Desired final star state for the idempotent mail-star mutation. */
+export interface StarStateUpdate {
+  starred: boolean;
+}
+
 export interface SendEmailResponse {
   id?: string | null;
   status: string;
@@ -198,6 +203,7 @@ export interface EmailListQuery {
 export interface EmailSearchQuery {
   q: string;
   limit?: number; // default 20, must be >= 1
+  page_token?: string | null;
 }
 
 /**
@@ -273,7 +279,7 @@ export interface OneboxApiResponse {
   toggleStar: MailMutationResponse;
   sendEmail: SendEmailResponse;
   saveDraft: SaveDraftResponse;
-  searchEmails: EmailListItem[];
+  searchEmails: EmailPage;
   getMailHealth: HealthResponse;
   checkInboxCount: CheckInboxResponse;
   getGlobalGmailHealth: GlobalGmailHealthResponse;
@@ -289,6 +295,7 @@ export interface OneboxApiRequestBody {
   invokeExecutiveAgent: AgentQuery;
   invokeGeneralAgent: AgentQuery;
   streamGeneralAgent: AgentQuery;
+  toggleStar: StarStateUpdate;
   sendEmail: EmailDraftRequest;
   saveDraft: EmailDraftRequest;
 }

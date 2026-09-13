@@ -33,8 +33,8 @@ def test_server_command_context_reuses_provider_function_call_identity():
     another_call = SimpleNamespace(id="provider-call-2")
     command_keys: dict[str, str] = {}
 
-    from agents import _command_key_for_tool_call
+    from server.agent_tools import command_key_for_tool_call
 
-    key = _command_key_for_tool_call(command_keys, scope="first", function_call=first_call)
-    assert _command_key_for_tool_call(command_keys, scope="retry", function_call=retry_call) == key
-    assert _command_key_for_tool_call(command_keys, scope="second", function_call=another_call) != key
+    key = command_key_for_tool_call(command_keys, scope="first", function_call=first_call)
+    assert command_key_for_tool_call(command_keys, scope="retry", function_call=retry_call) == key
+    assert command_key_for_tool_call(command_keys, scope="second", function_call=another_call) != key

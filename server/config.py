@@ -4,7 +4,7 @@ from enum import Enum
 import os
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # Persistent services.
     DATABASE_URL: str
     REDIS_URL: str
+    DATABASE_CONNECT_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+    DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=100)
+    DATABASE_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
 
     # External provider isolation. Every synchronous SDK operation has a finite
     # caller deadline and bounded admission; streaming also has an idle limit.
@@ -98,6 +101,34 @@ class Settings(BaseSettings):
     LLM_STREAM_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=600)
     LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)
+    # Safe provider reads/idempotent writes use this observable bounded retry policy.
+    # Its deadline bounds both retry waits and each individual provider attempt.
+    # Ambiguous external writes are never retried by this policy.
+    PROVIDER_RETRY_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    PROVIDER_RETRY_INITIAL_SECONDS: float = Field(default=0.25, gt=0, le=60)
+    PROVIDER_RETRY_MAX_SECONDS: float = Field(default=2.0, gt=0, le=300)
+    PROVIDER_RETRY_DEADLINE_SECONDS: float = Field(default=10.0, gt=0, le=600)
+    # Retention applies only to terminal records; reconciliation-required actions
+    # remain available for explicit operator resolution.
+    PENDING_ACTION_RETENTION_DAYS: int = Field(default=30, ge=1, le=3650)
+    GMAIL_JOB_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
+    GMAIL_TRIAGE_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
+    RETENTION_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600, ge=60, le=86_400)
+    # Set only for a controlled local/private network. Production otherwise
+    # requires authenticated TLS Redis; PostgreSQL TLS is always required.
+    REDIS_TRUSTED_LOCAL_NETWORK: bool = False
+
+    # Durable Gmail Pub/Sub ingestion/worker limits. Jobs are PostgreSQL-backed
+    # and every lease is finite so a crash can be reconciled safely.
+    PUBSUB_MAX_ENVELOPE_BYTES: int = Field(default=65_536, ge=1_024, le=1_048_576)
+    GMAIL_NOTIFICATION_POLL_SECONDS: float = Field(default=1.0, gt=0, le=60)
+    GMAIL_NOTIFICATION_LEASE_SECONDS: int = Field(default=120, ge=10, le=3_600)
+    GMAIL_NOTIFICATION_MAX_ATTEMPTS: int = Field(default=5, ge=1, le=100)
+    GMAIL_RETRY_BACKOFF_INITIAL_SECONDS: int = Field(default=5, ge=1, le=3_600)
+    GMAIL_RETRY_BACKOFF_MAX_SECONDS: int = Field(default=300, ge=1, le=86_400)
+    GMAIL_RESYNC_MAX_MESSAGES: int = Field(default=100, ge=1, le=1_000)
+    GMAIL_WATCH_RENEWAL_SECONDS: int = Field(default=86_400, ge=300, le=604_800)
+    GMAIL_WORKER_LIVENESS_SECONDS: int = Field(default=60, ge=10, le=3_600)
 
     # JWT contract. Priority 3 will enforce issuer and audience at verification.
     SECRET_KEY: str
@@ -110,9 +141,11 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URI: str
     FRONTEND_OAUTH_CALLBACK_URI: str
 
-    # Per-user OAuth tokens are encrypted with the active key from this
-    # read-only JSON keyring. Leave both unset only when no credential operation
-    # is enabled; OAuth connection/refresh requests then fail closed.
+    # New and refreshed OAuth credential writes use the active key from this
+    # read-only JSON keyring. Legacy dual-read rows can remain until a later
+    # plaintext-column contraction migration completes. Leave both settings
+    # unset only when no credential operation is enabled; OAuth connection and
+    # refresh requests then fail closed.
     OAUTH_TOKEN_KEYRING_PATH: Path | None = None
     OAUTH_TOKEN_ACTIVE_KEY_ID: str | None = None
 
@@ -282,14 +315,18 @@ class Settings(BaseSettings):
                 "OAUTH_TOKEN_KEYRING_PATH and OAUTH_TOKEN_ACTIVE_KEY_ID must be configured together"
             )
 
+        if self.GMAIL_RETRY_BACKOFF_INITIAL_SECONDS > self.GMAIL_RETRY_BACKOFF_MAX_SECONDS:
+            raise ValueError("GMAIL_RETRY_BACKOFF_INITIAL_SECONDS must not exceed GMAIL_RETRY_BACKOFF_MAX_SECONDS")
+        if self.PROVIDER_RETRY_INITIAL_SECONDS > self.PROVIDER_RETRY_MAX_SECONDS:
+            raise ValueError("PROVIDER_RETRY_INITIAL_SECONDS must not exceed PROVIDER_RETRY_MAX_SECONDS")
+        if self.PROVIDER_RETRY_DEADLINE_SECONDS < self.PROVIDER_RETRY_INITIAL_SECONDS:
+            raise ValueError("PROVIDER_RETRY_DEADLINE_SECONDS must cover at least one retry delay")
+
         if self.SERVICE_ROLE is ServiceRole.COMBINED and self.ENVIRONMENT not in {
             Environment.DEVELOPMENT,
             Environment.TEST,
         }:
             raise ValueError("SERVICE_ROLE=combined is allowed only in development or test")
-
-        if self.SERVICE_ROLE is ServiceRole.API and self.AUTOMATION_ENABLED:
-            raise ValueError("AUTOMATION_ENABLED requires SERVICE_ROLE=automation_worker or combined")
 
         if self.SERVICE_ROLE is ServiceRole.AUTOMATION_WORKER and not self.AUTOMATION_ENABLED:
             raise ValueError("SERVICE_ROLE=automation_worker requires AUTOMATION_ENABLED=true")
@@ -330,6 +367,15 @@ class Settings(BaseSettings):
                     raise ValueError(f"{setting_name} must use HTTPS in production")
             if any(urlsplit(origin).scheme != "https" for origin in self.cors_allowed_origins):
                 raise ValueError("CORS_ALLOWED_ORIGINS must use HTTPS in production")
+            database_query = parse_qs(urlsplit(self.DATABASE_URL).query)
+            database_tls = database_query.get("ssl", database_query.get("sslmode", [""]))[0].casefold()
+            if database_tls not in {"require", "verify-ca", "verify-full"}:
+                raise ValueError("DATABASE_URL must require PostgreSQL TLS in production")
+            redis_url = urlsplit(self.REDIS_URL)
+            if not redis_url.password:
+                raise ValueError("REDIS_URL must include Redis authentication in production")
+            if not self.REDIS_TRUSTED_LOCAL_NETWORK and redis_url.scheme != "rediss":
+                raise ValueError("REDIS_URL must use rediss:// outside a trusted local network in production")
 
         return self
 
@@ -352,7 +398,15 @@ class Settings(BaseSettings):
         return tuple(filter(None, self.CORS_ALLOWED_ORIGINS.split(",")))
 
     @property
+    def requires_redis(self) -> bool:
+        return self.SERVICE_ROLE in {ServiceRole.API, ServiceRole.COMBINED}
+
+    @property
     def runs_automation(self) -> bool:
+        return self.runs_automation_worker
+
+    @property
+    def runs_automation_worker(self) -> bool:
         return self.AUTOMATION_ENABLED and self.SERVICE_ROLE in {
             ServiceRole.AUTOMATION_WORKER,
             ServiceRole.COMBINED,

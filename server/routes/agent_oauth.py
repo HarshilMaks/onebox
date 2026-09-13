@@ -2,13 +2,12 @@ import logging
 from uuid import UUID
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.config import settings
 from server.database import get_agent_db
-from server.logging_config import setup_logging
 from server.models import AgentToken
 from server.oauth_state import OAuthStateStoreUnavailable, consume_oauth_state, create_oauth_state
 from server.schemas import AgentStatusResponse, OAuthStartResponse, VerifyAndCreateEntryResponse
@@ -23,7 +22,6 @@ from server.services.credentials import (
 )
 from server.services.setup_google import get_current_user_info
 
-setup_logging()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agent", tags=["Agent auth"])
 
@@ -64,9 +62,9 @@ async def start_oauth(user_info: dict = Depends(get_current_user_info)):
 
 @router.get("/oauth/callback")
 async def oauth_callback(
-    code: str,
-    state: str,
-    scope: str | None = None,
+    code: str = Query(..., min_length=1, max_length=4_096),
+    state: str = Query(..., min_length=1, max_length=512),
+    scope: str | None = Query(default=None, max_length=2_048),
     db: AsyncSession = Depends(get_agent_db),
 ):
     """Exchange a one-time, owner-bound OAuth callback for stored credentials."""

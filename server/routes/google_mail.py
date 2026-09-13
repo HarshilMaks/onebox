@@ -1,394 +1,80 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from server.schemas import EmailDetail, EmailDraft, EmailListItem, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from server.schemas import EmailDetail, EmailDraft, EmailPage, MailMutationResponse, SendEmailResponse, SaveDraftResponse, HealthResponse, CheckInboxResponse, StarStateUpdate
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from email.mime.text import MIMEText
 import base64
 import hashlib
 import logging
-from server.logging_config import setup_logging
-from typing import List, Dict, Any, Optional
-from uuid import UUID
 from server.services.setup_google import get_current_user_info, get_gmail_service
-from server.redis_cache import cache_get, cache_set, invalidate_user_mail_cache
-from server.integrations.google import (
-    GoogleOperationInternal,
-    GoogleOperationRejected,
-    GoogleOperationTimeout,
-    GoogleOperationUnavailable,
-    execute_google_request,
+from server.redis_cache import (
+    MAIL_DETAIL_CACHE_TTL_SECONDS,
+    MAIL_PAGE_CACHE_TTL_SECONDS,
+    cache_get,
+    cache_set,
+    invalidate_user_mail_cache,
+    user_mail_cache_key,
 )
-from email.utils import parsedate_to_datetime
-from datetime import datetime
-import re
+from server.integrations.gmail import execute_gmail_request as _gmail_execute
+from server.integrations.google import GoogleOperationSafety
+from server.services.mailbox import fetch_message_page as _fetch_message_page
+from server.services.mailbox import parse_message, search_emails
 
 
-def _mail_provider_error(error: Exception) -> HTTPException:
-    if isinstance(error, GoogleOperationTimeout):
-        return HTTPException(status_code=504, detail="Gmail request timed out. Please try again.")
-    if isinstance(error, GoogleOperationUnavailable):
-        return HTTPException(status_code=503, detail="Gmail is temporarily unavailable. Please try again.")
-    if isinstance(error, GoogleOperationRejected):
-        status_code = error.status_code if error.status_code and 400 <= error.status_code < 500 else 502
-        return HTTPException(status_code=status_code, detail="Gmail request failed. Please try again.")
-    return HTTPException(status_code=502, detail="Gmail request failed. Please try again.")
-
-
-async def _gmail_execute(service: Resource, request: Any) -> Any:
-    try:
-        return await execute_google_request(request, resource=service)
-    except (
-        GoogleOperationInternal,
-        GoogleOperationRejected,
-        GoogleOperationTimeout,
-        GoogleOperationUnavailable,
-    ) as exc:
-        logger.warning("Gmail provider operation failed", exc_info=True)
-        raise _mail_provider_error(exc) from None
-
-
-setup_logging()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mail", tags=["Email-Operations"])
 
 
-async def get_attachment_data(service: Resource, user_id: str, message_id: str, attachment_id: str) -> Optional[str]:
-    """Fetches attachment data (base64 encoded)."""
-    try:
-        attachment = await _gmail_execute(
-            service,
-            service.users().messages().attachments().get(
-                userId=user_id, messageId=message_id, id=attachment_id
-            ),
-        )
-        return attachment.get('data')
-    except (HttpError, HTTPException):
-        logger.warning("Inline attachment %s could not be fetched", attachment_id)
-        return None
-
-async def process_email_parts(
-    service: Resource,
-    user_id: str, # 'me' or actual user ID
-    message_id: str,
-    parts: List[Dict[str, Any]],
-    cid_map: Dict[str, Dict[str, str]]
-) -> Optional[str]:
-    """
-    Recursively processes MIME parts to find HTML body and build CID map for inline images.
-    Returns the HTML body content if found.
-    """
-    html_body_content = None
-    for part in parts:
-        mime_type = part.get('mimeType', '').lower()
-        content_id_header = next((h['value'] for h in part.get('headers', []) if h['name'].lower() == 'content-id'), None)
-        
-        if mime_type == 'text/html' and not html_body_content: # Take the first HTML part
-            if part.get('body', {}).get('data'):
-                try:
-                    html_body_content = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='replace')
-                except Exception as e:
-                    logger.error(f"Error decoding HTML part for message {message_id}: {e}")
-        
-        elif mime_type.startswith('image/') and content_id_header:
-            cid = content_id_header.strip('<>') # Remove < > brackets
-            if cid not in cid_map: # Only process if not already mapped (e.g. from multipart/alternative)
-                image_data_b64 = None
-                if part.get('body', {}).get('data'):
-                    image_data_b64 = part['body']['data']
-                elif part.get('body', {}).get('attachmentId'):
-                    attachment_id = part['body']['attachmentId']
-                    logger.info(f"Fetching inline attachment {attachment_id} for CID {cid} in message {message_id}")
-                    image_data_b64 = await get_attachment_data(service, user_id, message_id, attachment_id)
-                
-                if image_data_b64:
-                    cid_map[cid] = {
-                        'mimeType': mime_type,
-                        'data': image_data_b64 # Already base64url encoded from API
-                    }
-
-        if part.get('parts'): # Recurse for nested parts (e.g., multipart/related, multipart/alternative)
-            nested_html = await process_email_parts(service, user_id, message_id, part['parts'], cid_map)
-            if nested_html and not html_body_content: # Prioritize nested HTML if found and top-level not yet
-                html_body_content = nested_html
-                
-    return html_body_content
-
-
-async def parse_message(service: Resource, msg: Dict[str, Any], user_id_for_attachments: str = 'me') -> Dict[str, Any]:
-    headers_list = msg.get('payload', {}).get('headers', [])
-    headers = {h['name'].lower(): h['value'] for h in headers_list}
-
-    to_header = headers.get('to', '')
-    to_list = [addr.strip() for addr in to_header.split(',') if addr.strip()] if isinstance(to_header, str) else []
-    cc_header = headers.get('cc', '')
-    cc_list = [addr.strip() for addr in cc_header.split(',') if addr.strip()] if isinstance(cc_header, str) else []
-    
-    date_str = headers.get('date')
-    date_iso = datetime.utcnow().isoformat() # Fallback
-    if date_str:
-        try:
-            dt_obj = parsedate_to_datetime(date_str)
-            date_iso = dt_obj.isoformat()
-        except Exception:
-            internal_date_ms_str = msg.get('internalDate')
-            if internal_date_ms_str:
-                try: date_iso = datetime.fromtimestamp(int(internal_date_ms_str) / 1000).isoformat()
-                except: pass
-
-    html_body = None
-    cid_data_map: Dict[str, Dict[str,str]] = {} # Maps CID to {'mimeType': 'image/png', 'data': 'base64string'}
-    
-    payload = msg.get('payload', {})
-    if payload.get('parts'):
-        html_body = await process_email_parts(service, user_id_for_attachments, msg['id'], payload['parts'], cid_data_map)
-    elif payload.get('mimeType', '').lower() == 'text/html' and payload.get('body', {}).get('data'):
-        # Handle non-multipart email that is just HTML
-        try:
-            html_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace')
-        except Exception as e:
-            logger.error(f"Error decoding simple HTML body for message {msg['id']}: {e}")
-
-    # If HTML body was found and there are CIDs to replace
-    if html_body and cid_data_map:
-        for cid, image_info in cid_data_map.items():
-            # Regex to find cid: anystring including the cid value, case insensitive for "cid"
-            # It looks for src="cid:..." or src='cid:...'
-            # Ensure cid is escaped for regex if it contains special characters (though unlikely for CIDs)
-            escaped_cid = re.escape(cid)
-            # The data from Gmail API is base64url, convert to standard base64 if needed for data URI
-            # Standard base64 uses + and /, base64url uses - and _
-            # Padding (=) might also be an issue, data URIs generally expect standard base64 padding.
-            standard_b64_data = image_info['data'].replace('-', '+').replace('_', '/')
-            # Add padding if necessary
-            missing_padding = len(standard_b64_data) % 4
-            if missing_padding:
-                standard_b64_data += '=' * (4 - missing_padding)
-
-            data_url = f"data:{image_info['mimeType']};base64,{standard_b64_data}"
-            
-            # More robust regex to handle quotes and potential spaces
-            html_body = re.sub(
-                rf"""src\s*=\s*['"]\s*cid:{re.escape(cid)}\s*['"]""",
-                f'src="{data_url}"',
-                html_body,
-                flags=re.IGNORECASE
-            )
-    elif not html_body and payload.get('mimeType','').lower() == 'text/plain' and payload.get('body', {}).get('data'):
-        # Fallback to plain text if no HTML
-        try:
-            plain_text_body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace')
-            # Convert plain text to basic HTML (e.g., wrap in <pre> and escape)
-            import html
-            html_body = f"<pre>{html.escape(plain_text_body)}</pre>"
-        except Exception as e:
-            logger.error(f"Error decoding plain text body for message {msg['id']}: {e}")
-
-
-    return {
-        'id': msg.get('id'),
-        'threadId': msg.get('threadId'),
-        'subject': headers.get('subject', "(No Subject)"),
-        'sender': headers.get('from', "Unknown Sender"),
-        'to': to_list,
-        'cc': cc_list,
-        'snippet': msg.get('snippet', ''),
-        'body': html_body or msg.get('snippet', ''), # THIS IS THE IMPORTANT PART
-        'is_read': 'UNREAD' not in msg.get('labelIds', []),
-        'is_starred': 'STARRED' in msg.get('labelIds', []),
-        'labels': msg.get('labelIds', []),
-        'date': date_iso,
-    }
-    
-def to_email_list_item(email: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the stable summary contract used by list and search endpoints."""
-    return {
-        "id": email["id"],
-        "threadId": email.get("threadId"),
-        "subject": email.get("subject", "(No Subject)"),
-        "sender": email.get("sender", "Unknown Sender"),
-        "to": email.get("to", []),
-        "snippet": email.get("snippet", ""),
-        "is_read": email.get("is_read", False),
-        "is_starred": email.get("is_starred", False),
-        "labels": email.get("labels", []),
-        "date": email.get("date"),
-    }
-
-
-async def search_emails(
-    service: Resource,
-    query: str,
-    user_id: str = 'me',
-    max_results: Optional[int] = None,
-) -> List[dict]:
-    results = []
-    try:
-        logger.info(f"Searching emails with query: {query} for user: {user_id}")
-        page_size = min(max_results, 100) if max_results is not None else 100
-        request = service.users().messages().list(
-            userId=user_id,
-            q=query,
-            maxResults=page_size,
-        )
-        while request and (max_results is None or len(results) < max_results):
-            response = await _gmail_execute(service, request)
-            messages_metadata = response.get('messages', [])
-            if not messages_metadata:
-                break
-
-            if max_results is not None:
-                remaining = max_results - len(results)
-                messages_metadata = messages_metadata[:remaining]
-
-            batch = service.new_batch_http_request()
-            message_details_temp = {}
-
-            def parse_batch_response(request_id, batch_response, exception):
-                if exception is not None:
-                    logger.error(
-                        f"Batch get error for message ID {request_id} for user {user_id}: {exception}"
-                    )
-                    return
-
-                message_details_temp[batch_response['id']] = batch_response
-
-            for msg_meta in messages_metadata:
-                batch.add(
-                    service.users().messages().get(
-                        userId=user_id,
-                        id=msg_meta['id'],
-                        format='full',
-                    ),
-                    callback=parse_batch_response,
-                    request_id=msg_meta['id'],
-                )
-
-            await _gmail_execute(service, batch)
-
-            for msg_meta in messages_metadata:
-                if msg_meta['id'] in message_details_temp:
-                    results.append(
-                        await parse_message(
-                            service,
-                            message_details_temp[msg_meta['id']],
-                            user_id_for_attachments=user_id,
-                        )
-                    )
-
-            if max_results is not None and len(results) >= max_results:
-                break
-            request = service.users().messages().list_next(request, response)
-
-    except HttpError as e:
-        logger.exception(
-            f"Failed during email search with query '{query}' for user {user_id}: "
-            f"{e.content.decode() if e.content else str(e)}"
-        )
-        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred during search with query '{query}' for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
-
-    return results
-
-
 # ---------- Endpoints ----------
 @router.get("/emails", response_model=EmailPage)
 async def fetch_emails(
-    folder: str = Query("inbox", description="Folder: inbox, sent, spam, trash, starred, all"),
-    limit: int = Query(20, ge=1, description="Max number of emails per page"),
-    page_token: str = Query(None, description="Token for pagination"),
+    folder: str = Query("inbox", min_length=1, max_length=32, description="Folder: inbox, sent, spam, trash, starred, all"),
+    limit: int = Query(20, ge=1, le=100, description="Max number of emails per page"),
+    page_token: str | None = Query(default=None, min_length=1, max_length=512, description="Gmail pagination token"),
     user_info: dict = Depends(get_current_user_info),
-    service: Resource = Depends(get_gmail_service)
+    service: Resource = Depends(get_gmail_service),
 ):
-    user_id = user_info["user_id"] # This is your application's internal user_id
-    gmail_user_id_param = 'me' # Use 'me' for Gmail API calls for the authenticated user
-    logger.info(f"Fetching emails from folder: {folder} for app user: {user_id} (Gmail user: {gmail_user_id_param}) with limit: {limit}, page_token: {page_token}")
-    
-    cache_key = f"user:{user_id}:emails_v3:{folder}:{limit}:{page_token}"
+    user_id = str(user_info["user_id"])
+    label_map = {
+        "inbox": ["INBOX"],
+        "sent": ["SENT"],
+        "spam": ["SPAM"],
+        "trash": ["TRASH"],
+        "starred": ["STARRED"],
+        "all": [],
+    }
+    if folder not in label_map:
+        raise HTTPException(status_code=400, detail="Invalid folder")
+
+    token_hash = hashlib.sha256((page_token or "first").encode("utf-8")).hexdigest()
+    cache_key = await user_mail_cache_key(user_id, f"page:{folder}:{limit}:{token_hash}")
     cached_data = await cache_get(cache_key)
-    if cached_data:
-        logger.info(f"Serving cached emails for user {user_id} from {folder} (key: {cache_key})")
+    if isinstance(cached_data, dict):
         return cached_data
 
-    label_map = {
-        'inbox': ['INBOX'], 'sent': ['SENT'], 'spam': ['SPAM'],
-        'trash': ['TRASH'], 'starred': ['STARRED'], 'all': [],
-    }
-    if folder not in label_map and folder != 'all':
-        raise HTTPException(status_code=400, detail="Invalid folder")
-    label_ids = label_map.get(folder, [])
-
-    emails_data: List[dict] = []
-    next_page_token_val = None
-
     try:
-        if folder == 'starred': # Starred still needs search then full fetch
-            all_starred_msgs_parsed = await search_emails(service, 'is:starred', user_id=gmail_user_id_param)
-            start_index = 0
-            if page_token:
-                idx = next((i for i, msg in enumerate(all_starred_msgs_parsed) if msg['id'] == page_token), -1)
-                if idx != -1: start_index = idx + 1
-            emails_data = [
-                to_email_list_item(email)
-                for email in all_starred_msgs_parsed[start_index : start_index + limit]
-            ]
-            if start_index + limit < len(all_starred_msgs_parsed):
-                next_page_token_val = all_starred_msgs_parsed[start_index + limit]['id']
-        else:
-            request_params = {'userId': gmail_user_id_param, 'maxResults': limit, 'labelIds': label_ids}
-            if page_token: request_params['pageToken'] = page_token
-            
-            request = service.users().messages().list(**request_params)
-            response = await _gmail_execute(service, request)
-            next_page_token_val = response.get('nextPageToken')
-            messages_metadata = response.get('messages', [])
-
-            if messages_metadata:
-                batch = service.new_batch_http_request()
-                message_details_temp = {}
-                def parse_batch_list_response(request_id, batch_response, exception):
-                    if exception: logger.error(f"Batch list get error for msg ID {request_id}: {exception}")
-                    else: message_details_temp[batch_response['id']] = batch_response
-                
-                for msg_meta in messages_metadata:
-                     batch.add(service.users().messages().get(userId=gmail_user_id_param, id=msg_meta['id'], format='full'),
-                               callback=parse_batch_list_response, request_id=msg_meta['id'])
-                await _gmail_execute(service, batch)
-                emails_data = []
-                for msg_meta in messages_metadata:
-                    raw_message = message_details_temp.get(msg_meta['id'])
-                    if raw_message is not None:
-                        emails_data.append(
-                            to_email_list_item(
-                                await parse_message(
-                                    service,
-                                    raw_message,
-                                    user_id_for_attachments=gmail_user_id_param,
-                                )
-                            )
-                        )
-
-        result = {"emails": emails_data, "next_page_token": next_page_token_val}
-        await cache_set(cache_key, result, ttl=60)
+        result = await _fetch_message_page(
+            service,
+            user_id="me",
+            limit=limit,
+            page_token=page_token,
+            label_ids=label_map[folder],
+        )
+        await cache_set(cache_key, result, ttl=MAIL_PAGE_CACHE_TTL_SECONDS)
         return result
-    except HttpError as e: # Catch HttpError specifically
-        content = e.content.decode() if e.content else str(e)
-        logger.exception(f"Gmail API error fetching emails from {folder} for user {user_id}: {content}")
-        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"Unexpected error fetching emails from {folder} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
+    except HttpError as exc:
+        raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
+    except Exception:
+        logger.exception("Unexpected Gmail page fetch failure")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 
 @router.get("/emails/{email_id}", response_model=EmailDetail)
 async def fetch_email_by_id(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -396,7 +82,7 @@ async def fetch_email_by_id(
     gmail_user_id_param = 'me'
     logger.info(f"Fetching email with ID: {email_id} for app user {user_id}")
     
-    cache_key = f"user:{user_id}:email_v3:{email_id}"
+    cache_key = await user_mail_cache_key(str(user_id), f"detail:{email_id}")
     cached_email = await cache_get(cache_key)
     if cached_email:
         logger.info(f"Serving cached email for ID {email_id}, user {user_id} (key: {cache_key})")
@@ -406,9 +92,10 @@ async def fetch_email_by_id(
         msg = await _gmail_execute(
             service,
             service.users().messages().get(userId=gmail_user_id_param, id=email_id, format='full'),
+            safety=GoogleOperationSafety.READ,
         )
         parsed_email = await parse_message(service, msg, user_id_for_attachments=gmail_user_id_param)
-        await cache_set(cache_key, parsed_email, ttl=300)
+        await cache_set(cache_key, parsed_email, ttl=MAIL_DETAIL_CACHE_TTL_SECONDS)
         return parsed_email
     except HttpError as e:
         content = e.content.decode() if e.content else str(e)
@@ -425,7 +112,7 @@ async def fetch_email_by_id(
 # Example for mark_as_read:
 @router.post("/emails/{email_id}/read", response_model=MailMutationResponse)
 async def mark_as_read(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -437,6 +124,7 @@ async def mark_as_read(
             service.users().messages().modify(
                 userId='me', id=email_id, body={'removeLabelIds': ['UNREAD']}
             ),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
         # Invalidate cache for this email and relevant lists
         await invalidate_user_mail_cache(str(user_id), email_id)
@@ -448,7 +136,7 @@ async def mark_as_read(
 
 @router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
 async def mark_as_unread(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -460,6 +148,7 @@ async def mark_as_unread(
             service.users().messages().modify(
                 userId='me', id=email_id, body={'addLabelIds': ['UNREAD']}
             ),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "marked as unread"}
@@ -475,7 +164,7 @@ async def mark_as_unread(
 
 @router.post("/emails/{email_id}/trash", response_model=MailMutationResponse)
 async def move_to_trash(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -497,7 +186,7 @@ async def move_to_trash(
 
 @router.post("/emails/{email_id}/restore", response_model=MailMutationResponse)
 async def restore_from_trash(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -520,7 +209,7 @@ async def restore_from_trash(
 
 @router.delete("/emails/{email_id}", response_model=MailMutationResponse)
 async def delete_email(
-    email_id: str,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
@@ -541,57 +230,34 @@ async def delete_email(
 
 
 @router.post("/emails/{email_id}/star", response_model=MailMutationResponse)
-async def toggle_star(
-    email_id: str,
-    # star_status: bool, # If you want to set specific status, not just toggle
+async def set_star_state(
+    state: StarStateUpdate,
+    email_id: str = Path(..., min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
     user_info: dict = Depends(get_current_user_info),
-    service: Resource = Depends(get_gmail_service)
+    service: Resource = Depends(get_gmail_service),
 ):
+    """Set the desired star label exactly; no read-then-toggle race exists."""
     user_id = user_info["user_id"]
-    logger.info(f"Toggling star for email: {email_id} for user: {user_id}")
+    body = {"addLabelIds": ["STARRED"]} if state.starred else {"removeLabelIds": ["STARRED"]}
     try:
-        msg = await _gmail_execute(
-            service,
-            service.users().messages().get(userId='me', id=email_id, format='minimal'),
-        )
-        labels = msg.get('labelIds', [])
-        is_starred = 'STARRED' in labels
-        
-        # If you want to set specific status based on a param:
-        # desired_starred_state = star_status 
-        # add_labels = ['STARRED'] if desired_starred_state and not is_starred else []
-        # remove_labels = ['STARRED'] if not desired_starred_state and is_starred else []
-        
-        # For simple toggle:
-        add_labels = [] if is_starred else ['STARRED']
-        remove_labels = ['STARRED'] if is_starred else []
-
-        body_mod = {}
-        if add_labels: body_mod['addLabelIds'] = add_labels
-        if remove_labels: body_mod['removeLabelIds'] = remove_labels
-
-        if not body_mod: # No change needed
-            new_status = "starred" if is_starred else "unstarred"
-            logger.info(f"No label change needed for email {email_id}, current status: {new_status}")
-            return {"id": email_id, "status": new_status, "action": "no_change"}
-
         await _gmail_execute(
             service,
-            service.users().messages().modify(userId='me', id=email_id, body=body_mod),
+            service.users().messages().modify(userId="me", id=email_id, body=body),
+            safety=GoogleOperationSafety.IDEMPOTENT_WRITE,
         )
-        new_status = "unstarred" if is_starred else "starred" # This is the old status, after toggle it's reversed
-        
         await invalidate_user_mail_cache(str(user_id), email_id)
-
-        return {"id": email_id, "status": "starred" if not is_starred else "unstarred"} # Return new status
-    except HttpError as e:
-        logger.exception(f"Failed to toggle star for email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
-        raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
+        return {
+            "id": email_id,
+            "status": "starred" if state.starred else "unstarred",
+            "action": "set",
+        }
+    except HttpError as exc:
+        raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while toggling star for email {email_id} for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
+    except Exception:
+        logger.exception("Gmail star-state update failed")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 @router.post("/send", response_model=SendEmailResponse)
 async def send_email_api( # Renamed to avoid conflict
@@ -671,37 +337,25 @@ async def save_draft_api( # Renamed
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
-@router.get("/search", response_model=List[EmailListItem])
+@router.get("/search", response_model=EmailPage)
 async def search_endpoint(
-    q: str = Query(..., description="Gmail search query string"),
-    limit: int = Query(20, ge=1, description="Max number of results to return"), # Reduced default for search
+    q: str = Query(..., min_length=1, max_length=512, description="Gmail search query string"),
+    limit: int = Query(20, ge=1, le=100, description="Max number of results per page"),
+    page_token: str | None = Query(default=None, min_length=1, max_length=512, description="Gmail pagination token"),
     user_info: dict = Depends(get_current_user_info),
-    service: Resource = Depends(get_gmail_service)
+    service: Resource = Depends(get_gmail_service),
 ):
-    user_id = user_info["user_id"]
-    logger.info(f"User {user_id} performing search query: '{q}' with limit {limit}")
-    
-    # Cache key for search results might be complex if q is very dynamic. Consider not caching or short TTL.
+    user_id = str(user_info["user_id"])
     query_hash = hashlib.sha256(q.encode("utf-8")).hexdigest()
-    cache_key = f"user:{user_id}:search_v2:{query_hash}:{limit}"
+    token_hash = hashlib.sha256((page_token or "first").encode("utf-8")).hexdigest()
+    cache_key = await user_mail_cache_key(user_id, f"search:{query_hash}:{limit}:{token_hash}")
     cached_results = await cache_get(cache_key)
-    if cached_results:
-        logger.info(f"Serving cached search results for user {user_id}, query '{q}' (key: {cache_key})")
+    if isinstance(cached_results, dict):
         return cached_results
 
-    try:
-        search_results = await search_emails(service, q, user_id='me', max_results=limit)
-        limited_results = [to_email_list_item(email) for email in search_results]
-        await cache_set(cache_key, limited_results, ttl=60) # Cache search results for 1 minute
-        logger.info(f"Search returned {len(limited_results)} results for user {user_id}, endpoint limit {limit}.")
-        return limited_results
-    except HTTPException: # Re-raise HTTPExceptions from search_emails
-        raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred in the search endpoint for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
+    result = await search_emails(service, q, user_id="me", limit=limit, page_token=page_token)
+    await cache_set(cache_key, result, ttl=MAIL_PAGE_CACHE_TTL_SECONDS)
+    return result
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -721,6 +375,7 @@ async def check_inbox_api( # Renamed
         response = await _gmail_execute(
             service,
             service.users().labels().get(userId='me', id='INBOX'),
+            safety=GoogleOperationSafety.READ,
         )
         count = response.get('messagesTotal', 0) # messagesUnread might also be useful
         logger.info(f"Inbox total messages estimate for user {user_id}: {count}")

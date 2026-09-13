@@ -56,6 +56,9 @@ class RedisAdapter:
         finally:
             self._slots.release()
 
+    async def ping(self) -> bool:
+        return bool(await self._run(self.client.ping()))
+
     async def get(self, key: str) -> str | None:
         return await self._run(self.client.get(key))
 
@@ -66,6 +69,9 @@ class RedisAdapter:
         if not keys:
             return 0
         return await self._run(self.client.delete(*keys))
+
+    async def incr(self, key: str) -> int:
+        return int(await self._run(self.client.incr(key)))
 
     async def consume(self, script: str, key: str) -> str | None:
         return await self._run(self.client.eval(script, 1, key))

@@ -12,7 +12,7 @@ important_contacts:
   - "manansharma127021@gmail.com"
   - "shravankumarkodidhala@gmail.com"
   - "harshilatbusiness@gmail.com"
-timezone: "IST"
+timezone: "Asia/Kolkata"
 
 background: |
   Khushwant is an AI/ML engineer and founder of Hexel Studio — a deep tech company building infrastructure and tools for AI agent orchestration, agent marketplaces, and developer productivity.
@@ -53,5 +53,3 @@ triage_email: |
   - Internal emails where someone from the Hexel team is blocked or needs a decision from Khushwant
   - Follow-ups from people Khushwant has met or committed to responding to
   - Any critical updates about running infrastructure, billing, or data access
-
-memory: true
