@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents import ExecutiveAgent, GeneralAgent, GeneralAgentStreamer
+from clients.prompt import EMAIL_AGENT_PROMPT
 from server.database import get_agent_db
 from server.schemas import (
     AgentErrorResponse,
@@ -236,7 +237,7 @@ async def invoke_general_agent_endpoint(
 ):
     try:
         agent = GeneralAgent(user_id=str(user_info["user_id"]))
-        return {"result": await agent.run(input_query=query.input)}
+        return {"result": await agent.run(input_query=query.input, system_prompt=EMAIL_AGENT_PROMPT)}
     except HTTPException:
         raise
     except (LlmOperationInternal, LlmOperationTimeout, LlmOperationUnavailable) as exc:

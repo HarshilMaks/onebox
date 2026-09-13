@@ -520,3 +520,31 @@ async def test_executive_calendar_calls_default_to_profile_timezone_and_allow_ov
         (["13-09-2026"], "America/New_York"),
         (["14-09-2026"], "Europe/London"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_uses_email_agent_prompt(monkeypatch):
+    captured = {}
+
+    class EmailAgent:
+        def __init__(self, *, user_id):
+            captured["user_id"] = user_id
+
+        async def run(self, *, input_query, system_prompt):
+            captured["input_query"] = input_query
+            captured["system_prompt"] = system_prompt
+            return "Generated email body."
+
+    monkeypatch.setattr(agent_router, "GeneralAgent", EmailAgent)
+
+    response = await agent_router.invoke_general_agent_endpoint(
+        AgentQuery(input="Write a project update"),
+        {"user_id": "owner"},
+    )
+
+    assert response == {"result": "Generated email body."}
+    assert captured == {
+        "user_id": "owner",
+        "input_query": "Write a project update",
+        "system_prompt": agent_router.EMAIL_AGENT_PROMPT,
+    }
