@@ -242,7 +242,7 @@ Returns `200 OK` if the process is up.
 GET /readyz HTTP/1.1
 Host: localhost:8000
 ```
-Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Makes zero external Google calls.
+Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Makes zero external Google API calls.
 
 **Readiness Response (200 OK):**
 ```json
