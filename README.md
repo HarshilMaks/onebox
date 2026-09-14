@@ -249,7 +249,7 @@ Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic r
 {
   "status": "ready",
   "database": "connected",
-  "migration_head": "e84c0a9b6d21",
+  "migration_head": "f5a3c9d8e271",
   "redis": "connected"
 }
 ```
