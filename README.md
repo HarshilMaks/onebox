@@ -490,7 +490,7 @@ onebox/
 │   │   ├── gmail.py             # Gmail resource builders & batch operations
 │   │   └── redis.py             # Redis connection pools and concurrency limits
 │   ├── routes/
-│   │   ├── agent_oauth.py       # Google OAuth 2.0 PKCE / state flows
+│   │   ├── agent_oauth.py       # Google OAuth 2.0 authorization-code / state flows
 │   │   ├── agent_router.py      # Executive/streaming agents & pending action lifecycle
 │   │   ├── google_mail.py       # User mail fetch, search, star, and delete endpoints
 │   │   └── push_router.py       # Authenticated Google Pub/Sub push receiver
