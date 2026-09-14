@@ -217,7 +217,7 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | --- | --- | --- | --- |
 | `GOOGLE_PROJECT_ID` | Yes | - | Google Cloud Platform project identifier. |
 | `GOOGLE_LOCATION` | Yes | `us-central1` | Google Cloud region for Vertex AI endpoints. |
-| `GOOGLE_MODEL` | Yes | `gemini-2.0-flash-lite` | Gemini model name used by agent implementations. |
+| `GOOGLE_MODEL` | Yes | `gemini-3.1-flash-lite` | Gemini model name used by agent implementations. |
 | `PUBSUB_TOPIC` | If worker | `None` | Full GCP Pub/Sub topic path (`projects/{p}/topics/{t}`). |
 | `PUBSUB_SUBSCRIPTION` | If worker | `None` | Full GCP Pub/Sub subscription path (`projects/{p}/subscriptions/{s}`). |
 | `PUBSUB_PUSH_AUDIENCE` | If worker | `None` | Expected audience in the Google-signed OIDC push authorization token. |
