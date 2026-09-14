@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Hexel Onebox Server",
+    title="OneBox Server",
     lifespan=lifespan,
     debug=False,
     responses={
