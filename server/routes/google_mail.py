@@ -81,7 +81,7 @@ async def fetch_email_by_id(
     user_id = user_info["user_id"]
     gmail_user_id_param = 'me'
     logger.info(f"Fetching email with ID: {email_id} for app user {user_id}")
-    
+
     cache_key = await user_mail_cache_key(str(user_id), f"detail:{email_id}")
     cached_email = await cache_get(cache_key)
     if cached_email:
@@ -260,7 +260,7 @@ async def set_star_state(
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 @router.post("/send", response_model=SendEmailResponse)
-async def send_email_api( # Renamed to avoid conflict
+async def send_email_api(
     email: EmailDraft,
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
@@ -297,7 +297,7 @@ async def send_email_api( # Renamed to avoid conflict
 
 
 @router.post("/drafts", response_model=SaveDraftResponse)
-async def save_draft_api( # Renamed
+async def save_draft_api(
     email: EmailDraft,
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
@@ -324,7 +324,7 @@ async def save_draft_api( # Renamed
                 service.users().drafts().create(userId='me', body=draft_body),
             )
             status_msg = "draft saved"
-        
+
         # Invalidate draft list cache if any
         return {"id": draft['id'], "status": status_msg, "draft_id": draft['id']}
     except HttpError as e:
@@ -364,7 +364,7 @@ def health_check():
     return {"status": "healthy"}
 
 @router.post("/check-inbox", response_model=CheckInboxResponse)
-async def check_inbox_api( # Renamed
+async def check_inbox_api(
     user_info: dict = Depends(get_current_user_info),
     service: Resource = Depends(get_gmail_service)
 ):
