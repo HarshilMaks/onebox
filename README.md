@@ -42,33 +42,62 @@ Managing high-volume executive communication, meeting scheduling, and task coord
 
 OneBox isolates API ingress, durable background processing, database migrations, and external provider integrations into distinct, single-responsibility components:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            FastAPI Application                              │
-│         (/mail, /executive, /generate-stream, /actions, /agent, /readyz)    │
-└──────────────────────┬───────────────────────────────┬──────────────────────┘
-                       │                               │
-                User JWT & OAuth              Pub/Sub Push Ingress
-                       │                               │
-        ┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-        │   PostgreSQL 16 (Async)     │ │   PostgreSQL Job Queue      │
-        │ (Tokens, Actions, Audits)   │ │ (Durable Leases & Backoff)  │
-        └──────────────┬──────────────┘ └──────────────┬──────────────┘
-                       │                               │
-                       │                        Worker Singleton Lease
-                       │                               │
-        ┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-        │       Interactive Agent     │ │   Durable Worker Daemon     │
-        │   (Gemini + Staged Tools)   │ │   (mail_notifications.py)   │
-        └──────────────┬──────────────┘ └──────────────┬──────────────┘
-                       │                               │
-                       │ Staged Pending Actions        │ Read-Only Triage
-                       │ (Explicit User Approval)      │ (Zero Tools Allowed)
-                       ▼                               ▼
-        ┌─────────────────────────────────────────────────────────────┐
-        │             Google Workspace APIs & Adapters                │
-        │            (Gmail API, Calendar API, Tasks API)             │
-        └─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    User(["👤 User / Client"])
+    GCP(["☁️ Google Cloud Pub/Sub"])
+
+    subgraph API ["FastAPI — role: api"]
+        R1["/mail · /executive\n/generate-stream · /actions"]
+        R2["/agent/health · /readyz · /livez"]
+        R3["/oauth · /push"]
+    end
+
+    subgraph PG ["PostgreSQL 16"]
+        T["onebox_tokens\n(AES-256-GCM)"]
+        PA["pending_actions\n+ audit_events"]
+        JQ["gmail_notification_jobs\n(durable leases)"]
+        MB["gmail_mailbox_states\n(watch cursor)"]
+    end
+
+    subgraph Cache ["Redis 7"]
+        RC["Generational mail cache\n5 min body · 60 s pages"]
+    end
+
+    subgraph Worker ["python -m server.workers — role: automation_worker"]
+        W1["Notification job claimer\n(singleton PG lease)"]
+        W2["Watch renewal\n(exponential backoff)"]
+        W3["Retention cleanup"]
+    end
+
+    subgraph Gemini ["Google Gemini — Vertex AI"]
+        AG["ExecutiveAgent\nGeneralAgentStreamer"]
+    end
+
+    subgraph GWS ["Google Workspace APIs"]
+        GM["Gmail API"]
+        GC["Google Calendar API"]
+        GT["Google Tasks API"]
+    end
+
+    User -->|"JWT Bearer"| R1
+    User -->|"OAuth PKCE"| R3
+    GCP -->|"OIDC-signed push"| R3
+
+    R1 --> PG
+    R1 --> Cache
+    R1 --> Gemini
+    R3 --> JQ
+
+    AG -->|"stage only — no live write"| PA
+    PA -->|"POST /actions/{id}/approve"| GWS
+
+    W1 -->|"claim lease"| JQ
+    W1 -->|"zero tools — read only"| GM
+    W2 --> MB
+    W3 --> PG
+
+    T -->|"encrypted credential"| GWS
 ```
 
 ### Supported Process Roles
@@ -359,6 +388,31 @@ Authorization: Bearer <JWT_TOKEN>
     "verified_at": "2026-09-11T19:30:00Z"
   }
 }
+```
+
+### Pending Action Lifecycle
+
+Every external mutation (send email, create event, create task, send reply) follows this state machine. No external write is dispatched without an explicit `approve` call.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : Agent stages action\nvia tool call
+
+    pending --> processing : POST /actions/{id}/approve\n(user authorized)
+    pending --> rejected : POST /actions/{id}/reject
+    pending --> expired : TTL elapsed
+
+    processing --> succeeded : Provider write confirmed
+    processing --> failed : Terminal provider error
+    processing --> reconciliation_required : Ambiguous write result\n(timeout · transport uncertainty)
+
+    reconciliation_required --> succeeded : POST /actions/{id}/reconcile\n(operator verified success)
+    reconciliation_required --> failed : POST /actions/{id}/reconcile\n(operator confirmed failure)
+
+    succeeded --> [*]
+    failed --> [*]
+    rejected --> [*]
+    expired --> [*]
 ```
 
 ---
