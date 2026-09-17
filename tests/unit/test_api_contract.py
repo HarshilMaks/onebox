@@ -10,6 +10,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OPENAPI_ARTIFACT = REPOSITORY_ROOT / "docs" / "openapi.json"
 
 
+def test_openapi_uses_the_onebox_server_title():
+    assert app.openapi()["info"]["title"] == "OneBox Server"
+
+
 def test_committed_openapi_contract_matches_the_live_application():
     assert json.loads(OPENAPI_ARTIFACT.read_text(encoding="utf-8")) == app.openapi()
 
