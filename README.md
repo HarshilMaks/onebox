@@ -49,8 +49,8 @@ flowchart TD
 
     subgraph API ["FastAPI — role: api"]
         R1["/mail · /executive\n/generate-stream · /actions"]
-        R2["/agent/health · /readyz · /livez"]
-        R3["/oauth · /push"]
+        R2["/mail/agent/health · /readyz · /livez"]
+        R3["/agent/oauth · /mail/notifications"]
     end
 
     subgraph PG ["PostgreSQL 16"]
