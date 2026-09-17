@@ -195,7 +195,7 @@ make run-worker
 Interactive OpenAPI documentation is accessible at `http://localhost:8000/docs`.
 
 > [!NOTE]
-> Edit `user_config.yaml` to configure the agent's user profile, priority contacts, triage rules (`triage_no`, `triage_notify`, `triage_email`), and scheduling preferences. The `timezone` field (IANA format, e.g. `America/New_York`) sets the default timezone for all calendar tool operations.
+> Edit `user_config.yaml` to configure the local deployment's agent profile, priority contacts, and scheduling/response preferences. The `timezone` field (IANA format, e.g. `America/New_York`) sets the default timezone for calendar tool operations. The current inbound triage eligibility filter is server-controlled; `triage_no`, `triage_notify`, and `triage_email` are profile-template guidance and are not runtime triage rules.
 
 ---
 
