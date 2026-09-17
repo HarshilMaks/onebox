@@ -18,7 +18,7 @@ Managing high-volume executive communication, meeting scheduling, and task coord
 
 **OneBox** provides a resilient, secure foundation for AI-assisted executive operations. It pairs Google Gemini models with Google Workspace APIs (Gmail, Google Calendar, Google Tasks) while enforcing strict operational boundaries:
 
-1. **Interactive Agent Planning:** Users engage with executive and streaming agents to inspect schedules, search messages, and compose plans. Any mutation with an external side effect (sending an email, creating a calendar event, adding a task) is staged as an immutable, typed **pending action** requiring explicit user approval.
+1. **Interactive Agent Planning:** Users engage with executive and streaming agents to inspect schedules, search messages, and compose plans. Any external mutation requested through an interactive agent (sending an email, creating a calendar event, adding a task) is staged as an immutable, typed **pending action** requiring explicit user approval.
 2. **Durable Inbound Automation:** An asynchronous background worker receives authenticated Google Cloud Pub/Sub push notifications for a configured mailbox, acquiring singleton PostgreSQL leases and recovering message history safely. Inbound automation operates with **zero tool permissions**—it analyzes incoming messages according to user triage rules without autonomously modifying mail or issuing writes.
 3. **Enterprise Resilience & Governance:** Built with encrypted OAuth token keyrings, classified provider retry policies, generational Redis caching, and operator reconciliation workflows for uncertain provider writes.
 
@@ -26,7 +26,7 @@ Managing high-volume executive communication, meeting scheduling, and task coord
 
 ## Features
 
-- **Human-in-the-Loop Safeguards:** External mutations (email sends/replies, calendar events, tasks) are staged as immutable pending actions in PostgreSQL; no destructive effect executes without explicit authorization (`POST /actions/{action_id}/approve`).
+- **Human-in-the-Loop Safeguards:** Agent-initiated external mutations (email sends/replies, calendar events, tasks) are staged as immutable pending actions in PostgreSQL; no agent-driven destructive effect executes without explicit authorization (`POST /actions/{action_id}/approve`).
 - **Durable Gmail Pub/Sub Worker:** Scalable background notification daemon with PostgreSQL row-level locks, bounded lease recovery, automatic watch renewal, and safe history resynchronization.
 - **Strict Separation of Concerns:** Inbound automated triage is decoupled from interactive agent execution. Automated triage has zero tools, preventing unauthorized automated replies or state changes.
 - **Encrypted OAuth Keyring:** User tokens are protected at rest with AES-256-GCM using an active key ID from a mounted, read-only JSON keyring (`OAUTH_TOKEN_KEYRING_PATH`).
