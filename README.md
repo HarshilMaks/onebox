@@ -81,7 +81,7 @@ flowchart TD
     end
 
     User -->|"JWT Bearer"| R1
-    User -->|"OAuth PKCE"| R3
+    User -->|"OAuth authorization code + state"| R3
     GCP -->|"OIDC-signed push"| R3
 
     R1 --> PG
