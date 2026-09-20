@@ -338,9 +338,9 @@ Content-Type: application/json
 
 **SSE Stream Output:**
 ```
-data: {"event": "status", "content": "Querying inbox..."}
+data: {"event": "token", "content": "Querying inbox..."}
 
-data: {"event": "chunk", "content": "You have 3 unread messages..."}
+data: {"event": "token", "content": "You have 3 unread messages..."}
 
 data: {"event": "done", "content": ""}
 ```
