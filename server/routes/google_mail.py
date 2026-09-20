@@ -133,6 +133,11 @@ async def mark_as_read(
     except HttpError as e:
         logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {e.content.decode() if e.content else str(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred while marking email {email_id} as read for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 @router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
 async def mark_as_unread(

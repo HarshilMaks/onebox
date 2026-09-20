@@ -259,3 +259,34 @@ async def test_explicit_star_state_is_idempotent_and_never_reads_before_modify(m
         {"removeLabelIds": ["STARRED"]},
     ]
     assert observed_safety == [google.GoogleOperationSafety.IDEMPOTENT_WRITE] * 3
+
+
+@pytest.mark.asyncio
+async def test_mark_as_read_unexpected_error_returns_500(monkeypatch):
+    """mark_as_read must log and return 500 when an unexpected error occurs.
+
+    Previously the endpoint only caught HttpError, so a non-Google exception
+    would surface as an unlogged opaque 500 with no audit trail.
+    """
+    from fastapi import HTTPException
+
+    service = _Gmail()
+
+    async def explode(_service, _request, **_kwargs):
+        raise RuntimeError("transient serialisation failure")
+
+    async def noop_invalidate(*_args):
+        return True
+
+    monkeypatch.setattr(google_mail, "_gmail_execute", explode)
+    monkeypatch.setattr(google_mail, "invalidate_user_mail_cache", noop_invalidate)
+
+    with pytest.raises(HTTPException) as raised:
+        await google_mail.mark_as_read(
+            email_id="msg-42",
+            user_info={"user_id": "owner"},
+            service=service,
+        )
+
+    assert raised.value.status_code == 500
+    assert "Mail operation failed" in raised.value.detail
