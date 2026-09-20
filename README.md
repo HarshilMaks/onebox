@@ -271,15 +271,21 @@ Returns `200 OK` if the process is up.
 GET /readyz HTTP/1.1
 Host: localhost:8000
 ```
-Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Makes zero external Google API calls.
+Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Otherwise it returns `503 Service Unavailable` with a machine-readable reason. Makes zero external Google API calls.
 
-**Readiness Response (200 OK):**
+**Ready response (200 OK):**
 ```json
 {
   "status": "ready",
-  "database": "connected",
-  "migration_head": "f5a3c9d8e271",
-  "redis": "connected"
+  "reason": "ready"
+}
+```
+
+**Example unready response (503 Service Unavailable):**
+```json
+{
+  "status": "unready",
+  "reason": "redis_unavailable"
 }
 ```
 
