@@ -100,6 +100,16 @@ def test_parser_error_sentinel_is_not_analyzable_mail():
         assert "error" in mail.extract_email_content(malformed)
 
 
+def test_inbound_triage_does_not_discard_business_email_that_mentions_a_deal():
+    assert mail.should_process_email(
+        {
+            "from": "executive@example.test",
+            "subject": "Closing the Acme deal today",
+            "labels": ["INBOX"],
+        }
+    ) is True
+
+
 def _encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 

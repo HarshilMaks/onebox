@@ -27,7 +27,9 @@ def should_process_email(email_content: dict[str, Any]) -> bool:
     spam_labels = {"SPAM", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS"}
     if any(label in spam_labels for label in labels):
         return False
-    return not any(keyword in subject for keyword in ("unsubscribe", "newsletter", "promotion", "deal", "discount"))
+    # Gmail's CATEGORY_PROMOTIONS label is authoritative for promotions.  Avoid
+    # treating a business message that happens to mention a "deal" as marketing.
+    return not any(keyword in subject for keyword in ("unsubscribe", "newsletter", "promotion", "discount"))
 
 
 def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
