@@ -296,7 +296,7 @@ GET /mail/agent/health HTTP/1.1
 Host: localhost:8000
 Authorization: Bearer <JWT_TOKEN>
 ```
-Reports automation health; returns `200 OK` only if a valid unexpired Gmail watch and fresh worker heartbeat exist.
+Reports automation health for the authorized global operator. It returns `200 OK` with the health verdict in the `status` and `gmail_service_status` fields; both report healthy/ready only when a valid unexpired Gmail watch and fresh worker heartbeat exist.
 
 ```http
 GET /mail/agent/status HTTP/1.1
