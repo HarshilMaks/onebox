@@ -352,6 +352,39 @@ async def test_pubsub_invalid_google_auth_token_remains_401(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pubsub_malformed_verified_claims_are_rejected_as_invalid_authentication(monkeypatch):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from server.routes import push_router
+
+    async def malformed_claims(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(push_router, "run_google_operation", malformed_claims)
+    monkeypatch.setattr(
+        push_router,
+        "settings",
+        SimpleNamespace(
+            PUBSUB_PUSH_AUDIENCE="https://api.example.invalid/mail/notifications",
+            PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL="push@example.invalid",
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "headers": [(b"authorization", b"Bearer signed-token")],
+        }
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        await push_router.require_pubsub_push_auth(request)
+
+    assert raised.value.status_code == 401
+    assert raised.value.detail == "Invalid Pub/Sub push authentication"
+
+
+@pytest.mark.asyncio
 async def test_google_resource_lock_survives_caller_timeout():
     await google.close_google_adapter()
     resource = _MutableGoogleResource()

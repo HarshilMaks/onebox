@@ -62,6 +62,10 @@ async def require_pubsub_push_auth(request: Request) -> dict:
         logger.warning("Rejected Pub/Sub push request with an invalid OIDC token")
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication") from None
 
+    if not isinstance(claims, dict):
+        logger.warning("Rejected Pub/Sub push request with malformed OIDC claims")
+        raise HTTPException(status_code=401, detail="Invalid Pub/Sub push authentication")
+
     email = claims.get("email")
     if (
         claims.get("email_verified") is not True
