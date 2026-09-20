@@ -50,6 +50,9 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(name, str) or not isinstance(value, str):
                 raise ValueError("invalid header")
             headers[name.lower()] = value
+        labels = email_data.get("labelIds", [])
+        if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
+            raise ValueError("invalid labels")
         return {
             "id": email_data.get("id", ""),
             "threadId": email_data.get("threadId", ""),
@@ -57,7 +60,7 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
             "from": headers.get("from", "Unknown"),
             "to": headers.get("to", "Unknown"),
             "date": headers.get("date", "Unknown"),
-            "labels": email_data.get("labelIds", []),
+            "labels": labels,
             "body": get_email_body(payload),
         }
     except (TypeError, ValueError, UnicodeDecodeError):

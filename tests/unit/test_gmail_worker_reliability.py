@@ -104,6 +104,22 @@ def _encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
 
+@pytest.mark.parametrize("label_ids", ["INBOX", 1, ["INBOX", 1]])
+def test_inbound_parser_rejects_non_list_or_non_string_label_ids(label_ids):
+    content = mail.extract_email_content(
+        {
+            "labelIds": label_ids,
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Status update"}],
+                "mimeType": "text/plain",
+                "body": {"data": _encoded("body")},
+            },
+        }
+    )
+
+    assert content == {"error": "Invalid message payload"}
+
+
 def test_oversized_inbound_body_is_a_terminal_parser_error():
     content = mail.extract_email_content(
         {
