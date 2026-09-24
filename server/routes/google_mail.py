@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mail", tags=["Email-Operations"])
 
 
+def _format_http_error(error: HttpError) -> str:
+    """Safely decode provider error content without raising UnicodeDecodeError."""
+    if isinstance(error.content, bytes):
+        return error.content.decode("utf-8", errors="replace")
+    return str(error.content if error.content else error)
+
+
 # ---------- Endpoints ----------
 @router.get("/emails", response_model=EmailPage)
 async def fetch_emails(
@@ -98,7 +105,7 @@ async def fetch_email_by_id(
         await cache_set(cache_key, parsed_email, ttl=MAIL_DETAIL_CACHE_TTL_SECONDS)
         return parsed_email
     except HttpError as e:
-        content = e.content.decode() if e.content else str(e)
+        content = _format_http_error(e)
         logger.exception(f"Gmail API error fetching email ID {email_id} for user {user_id}: {content}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
@@ -131,7 +138,7 @@ async def mark_as_read(
         # Potentially invalidate list caches too, or update the specific item in list caches
         return {"id": email_id, "status": "marked as read"}
     except HttpError as e:
-        logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -158,7 +165,7 @@ async def mark_as_unread(
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "marked as unread"}
     except HttpError as e:
-        logger.exception(f"Failed to mark email {email_id} as unread for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to mark email {email_id} as unread for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -181,7 +188,7 @@ async def move_to_trash(
         # Also consider invalidating/updating list caches from which this email was removed
         return {"id": email_id, "status": "moved to trash"}
     except HttpError as e:
-        logger.exception(f"Failed to move email {email_id} to trash for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to move email {email_id} to trash for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -203,7 +210,7 @@ async def restore_from_trash(
         # Also consider invalidating/updating list caches to which this email was added
         return {"id": email_id, "status": "restored from trash"}
     except HttpError as e:
-        logger.exception(f"Failed to restore email {email_id} from trash for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to restore email {email_id} from trash for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -225,7 +232,7 @@ async def delete_email(
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "permanently deleted"}
     except HttpError as e:
-        logger.exception(f"Failed to delete email {email_id} for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to delete email {email_id} for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -292,7 +299,7 @@ async def send_email_api(
         await invalidate_user_mail_cache(str(user_id), message.get('id', ''))
         return {"id": message.get('id'), "status": "sent"}
     except HttpError as e:
-        logger.exception(f"Failed to send email for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to send email for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -333,7 +340,7 @@ async def save_draft_api(
         # Invalidate draft list cache if any
         return {"id": draft['id'], "status": status_msg, "draft_id": draft['id']}
     except HttpError as e:
-        logger.exception(f"Failed to save draft for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to save draft for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
@@ -394,7 +401,7 @@ async def check_inbox_api(
         logger.info(f"Inbox total messages estimate for user {user_id}: {count}")
         return {"status": "checked", "inbox_message_count_estimate": count}
     except HttpError as e:
-        logger.exception(f"Failed to check inbox count for user {user_id}: {e.content.decode() if e.content else str(e)}")
+        logger.exception(f"Failed to check inbox count for user {user_id}: {_format_http_error(e)}")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise

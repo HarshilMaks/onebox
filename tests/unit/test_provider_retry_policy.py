@@ -290,3 +290,39 @@ async def test_mark_as_read_unexpected_error_returns_500(monkeypatch):
 
     assert raised.value.status_code == 500
     assert "Mail operation failed" in raised.value.detail
+
+
+@pytest.mark.asyncio
+async def test_mark_as_read_handles_non_utf8_http_error_content_safely(monkeypatch):
+    """Non-UTF-8 bytes in HttpError content must not raise UnicodeDecodeError during logging."""
+    from fastapi import HTTPException
+    import httplib2
+
+    service = _Gmail()
+    corrupt_content = b"\x80\xff\xfe\xfd invalid utf-8"
+    resp = httplib2.Response({"status": "502"})
+    http_error = HttpError(resp, corrupt_content)
+
+    async def explode(_service, _request, **_kwargs):
+        raise http_error
+
+    monkeypatch.setattr(google_mail, "_gmail_execute", explode)
+
+    with pytest.raises(HTTPException) as raised:
+        await google_mail.mark_as_read(
+            email_id="msg-corrupt",
+            user_info={"user_id": "owner"},
+            service=service,
+        )
+
+    assert raised.value.status_code == 502
+    assert raised.value.detail == "Gmail request failed. Please try again."
+
+
+def test_format_http_error_decodes_safely():
+    import httplib2
+    resp = httplib2.Response({"status": "400"})
+    error = HttpError(resp, b"corrupted: \xff\xfe")
+    formatted = google_mail._format_http_error(error)
+    assert "\ufffd" in formatted
+
