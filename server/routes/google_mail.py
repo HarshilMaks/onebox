@@ -358,9 +358,17 @@ async def search_endpoint(
     if isinstance(cached_results, dict):
         return cached_results
 
-    result = await search_emails(service, q, user_id="me", limit=limit, page_token=page_token)
-    await cache_set(cache_key, result, ttl=MAIL_PAGE_CACHE_TTL_SECONDS)
-    return result
+    try:
+        result = await search_emails(service, q, user_id="me", limit=limit, page_token=page_token)
+        await cache_set(cache_key, result, ttl=MAIL_PAGE_CACHE_TTL_SECONDS)
+        return result
+    except HTTPException:
+        raise
+    except HttpError as exc:
+        raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
+    except Exception:
+        logger.exception("Unexpected Gmail search failure")
+        raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 
 @router.get("/health", response_model=HealthResponse)

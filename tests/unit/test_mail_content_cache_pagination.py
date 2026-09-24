@@ -424,3 +424,32 @@ async def test_page_with_unavailable_detail_is_not_cached_or_exposed_with_next_t
     assert raised.value.status_code == 503
     assert cache_writes == []
     assert service.detail_get_calls == ["one", "two", "two"]
+
+
+@pytest.mark.asyncio
+async def test_search_endpoint_unexpected_error_returns_500(monkeypatch):
+    """search_endpoint must catch unexpected errors and return 500."""
+    async def failing_search(*_args, **_kwargs):
+        raise RuntimeError("database/network unexpected crash")
+
+    async def mock_cache_key(*_args, **_kwargs):
+        return "test-key"
+
+    async def mock_cache_get(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(google_mail, "user_mail_cache_key", mock_cache_key)
+    monkeypatch.setattr(google_mail, "cache_get", mock_cache_get)
+    monkeypatch.setattr(google_mail, "search_emails", failing_search)
+
+    with pytest.raises(google_mail.HTTPException) as raised:
+        await google_mail.search_endpoint(
+            q="important",
+            limit=10,
+            page_token=None,
+            user_info={"user_id": "user-1"},
+            service=None,
+        )
+
+    assert raised.value.status_code == 500
+    assert raised.value.detail == "Mail operation failed. Please try again."
