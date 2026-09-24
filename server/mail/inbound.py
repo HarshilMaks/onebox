@@ -19,13 +19,14 @@ def should_process_email(email_content: dict[str, Any]) -> bool:
     """Apply the analysis-only skip policy without mutating mailbox state."""
     if "error" in email_content:
         return False
-    from_field = str(email_content.get("from", "")).lower()
-    subject = str(email_content.get("subject", "")).lower()
-    labels = email_content.get("labels", [])
+    from_field = str(email_content.get("from") or "").lower()
+    subject = str(email_content.get("subject") or "").lower()
+    raw_labels = email_content.get("labels")
+    labels = raw_labels if isinstance(raw_labels, (list, tuple, set)) else ()
     if re.search(r"no[-_.]?reply|donotreply|noreply", from_field):
         return False
     spam_labels = {"SPAM", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS"}
-    if any(label in spam_labels for label in labels):
+    if any(isinstance(label, str) and label.upper() in spam_labels for label in labels):
         return False
     # Gmail's CATEGORY_PROMOTIONS label is authoritative for promotions.  Avoid
     # treating a business message that happens to mention a "deal" as marketing.

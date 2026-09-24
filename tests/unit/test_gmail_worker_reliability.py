@@ -110,6 +110,27 @@ def test_inbound_triage_does_not_discard_business_email_that_mentions_a_deal():
     ) is True
 
 
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        (None, True),
+        ("SPAM", True),
+        (1, True),
+        ({"SPAM": True}, True),
+        (["spam"], False),
+        ({"spam"}, False),
+    ],
+)
+def test_inbound_triage_handles_malformed_optional_fields(labels, expected):
+    assert mail.should_process_email(
+        {
+            "from": None,
+            "subject": None,
+            "labels": labels,
+        }
+    ) is expected
+
+
 def _encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
