@@ -1052,12 +1052,19 @@
           {
             "in": "query",
             "name": "code",
-            "required": true,
+            "required": false,
             "schema": {
-              "maxLength": 4096,
-              "minLength": 1,
-              "title": "Code",
-              "type": "string"
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
             }
           },
           {
@@ -1069,6 +1076,23 @@
               "minLength": 1,
               "title": "State",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
             }
           },
           {

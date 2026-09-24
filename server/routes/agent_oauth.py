@@ -62,13 +62,15 @@ async def start_oauth(user_info: dict = Depends(get_current_user_info)):
 
 @router.get("/oauth/callback")
 async def oauth_callback(
-    code: str = Query(..., min_length=1, max_length=4_096),
+    code: str | None = Query(default=None, min_length=1, max_length=4_096),
     state: str = Query(..., min_length=1, max_length=512),
+    error: str | None = Query(default=None, max_length=256),
     scope: str | None = Query(default=None, max_length=2_048),
     db: AsyncSession = Depends(get_agent_db),
 ):
     """Exchange a one-time, owner-bound OAuth callback for stored credentials."""
     del scope  # Google may return this query parameter; it is not trusted input.
+
     try:
         state_binding = await consume_oauth_state(state)
     except OAuthStateStoreUnavailable:
@@ -84,6 +86,13 @@ async def oauth_callback(
     except ValueError:
         logger.error("OAuth state binding contained an invalid user identifier")
         return _frontend_redirect("failure", "Invalid OAuth state")
+
+    if error:
+        logger.warning("OAuth authorization was not completed for user %s", user_id)
+        return _frontend_redirect("failure", "OAuth authorization was not completed.")
+    if not code:
+        logger.warning("OAuth callback did not include an authorization code for user %s", user_id)
+        return _frontend_redirect("failure", "Invalid OAuth callback")
 
     try:
         exchange = await exchange_oauth_code(code)
