@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     PROVIDER_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     PROVIDER_MAX_CONCURRENCY: int = Field(default=8, ge=1, le=64)
     REDIS_MAX_CONCURRENCY: int = Field(default=16, ge=1, le=256)
+    # Generic HTTP bodies are capped before FastAPI parses JSON. Endpoint-level
+    # fields impose tighter limits where appropriate.
+    MAX_REQUEST_BODY_BYTES: int = Field(default=1_048_576, ge=1_024, le=10_485_760)
     LLM_STREAM_TIMEOUT_SECONDS: float = Field(default=90.0, gt=0, le=600)
     LLM_STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=300)
     LLM_STREAM_QUEUE_SIZE: int = Field(default=32, ge=1, le=1024)

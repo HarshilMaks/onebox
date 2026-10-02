@@ -14,6 +14,7 @@ from server.integrations.google import close_google_adapter
 from server.integrations.llm import close_llm_adapter
 from server.integrations.redis import close_redis_adapter
 from server.logging_config import bind_correlation_id, reset_correlation_id, setup_logging
+from server.request_limits import RequestBodyLimitMiddleware
 from server.routes import agent_oauth, agent_router, google_mail, push_router
 from server.schemas import PublicErrorResponse, ReadinessResponse
 from server.services.readiness import readiness_status
@@ -144,6 +145,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=settings.MAX_REQUEST_BODY_BYTES)
 
 
 @app.get("/livez")

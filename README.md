@@ -427,6 +427,7 @@ stateDiagram-v2
 
 ### Ingress & Payload Bounds
 To prevent resource exhaustion and Denial of Service, the API enforces strict input ceilings before dispatching work to external providers:
+- **Generic HTTP Request Bodies:** Capped at `MAX_REQUEST_BODY_BYTES` (1 MiB default) before JSON parsing.
 - **Agent Prompts:** Capped at 8,000 characters.
 - **Gmail Search Queries:** Capped at 512 characters.
 - **Mail Pagination Limits:** Capped at 100 messages per page.
