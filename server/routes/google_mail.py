@@ -26,12 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mail", tags=["Email-Operations"])
 
 
-def _format_http_error(error: HttpError) -> str:
-    """Safely decode provider error content without raising UnicodeDecodeError."""
-    if isinstance(error.content, bytes):
-        return error.content.decode("utf-8", errors="replace")
-    return str(error.content if error.content else error)
-
 
 # ---------- Endpoints ----------
 @router.get("/emails", response_model=EmailPage)
@@ -75,7 +69,7 @@ async def fetch_emails(
     except HttpError as exc:
         raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
     except Exception:
-        logger.exception("Unexpected Gmail page fetch failure")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 
@@ -87,12 +81,12 @@ async def fetch_email_by_id(
 ):
     user_id = user_info["user_id"]
     gmail_user_id_param = 'me'
-    logger.info(f"Fetching email with ID: {email_id} for app user {user_id}")
+    logger.info("Gmail mail-route operation")
 
     cache_key = await user_mail_cache_key(str(user_id), f"detail:{email_id}")
     cached_email = await cache_get(cache_key)
     if cached_email:
-        logger.info(f"Serving cached email for ID {email_id}, user {user_id} (key: {cache_key})")
+        logger.info("Gmail mail-route operation")
         return cached_email
 
     try:
@@ -105,13 +99,12 @@ async def fetch_email_by_id(
         await cache_set(cache_key, parsed_email, ttl=MAIL_DETAIL_CACHE_TTL_SECONDS)
         return parsed_email
     except HttpError as e:
-        content = _format_http_error(e)
-        logger.exception(f"Gmail API error fetching email ID {email_id} for user {user_id}: {content}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"Unexpected error fetching email ID {email_id} for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -124,7 +117,7 @@ async def mark_as_read(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"Marking email as read: {email_id} for user {user_id}")
+    logger.info("Gmail mail-route operation")
     try:
         await _gmail_execute(
             service,
@@ -138,12 +131,12 @@ async def mark_as_read(
         # Potentially invalidate list caches too, or update the specific item in list caches
         return {"id": email_id, "status": "marked as read"}
     except HttpError as e:
-        logger.exception(f"Failed to mark email {email_id} as read for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while marking email {email_id} as read for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 @router.post("/emails/{email_id}/unread", response_model=MailMutationResponse)
@@ -153,7 +146,7 @@ async def mark_as_unread(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"Marking email as unread: {email_id} for user: {user_id}")
+    logger.info("Gmail mail-route operation")
     try:
         await _gmail_execute(
             service,
@@ -165,12 +158,12 @@ async def mark_as_unread(
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "marked as unread"}
     except HttpError as e:
-        logger.exception(f"Failed to mark email {email_id} as unread for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while marking email {email_id} as unread for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -181,19 +174,19 @@ async def move_to_trash(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"Moving email to trash: {email_id} for user: {user_id}")
+    logger.info("Gmail mail-route operation")
     try:
         await _gmail_execute(service, service.users().messages().trash(userId='me', id=email_id))
         await invalidate_user_mail_cache(str(user_id), email_id)
         # Also consider invalidating/updating list caches from which this email was removed
         return {"id": email_id, "status": "moved to trash"}
     except HttpError as e:
-        logger.exception(f"Failed to move email {email_id} to trash for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while moving email {email_id} to trash for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 @router.post("/emails/{email_id}/restore", response_model=MailMutationResponse)
@@ -203,19 +196,19 @@ async def restore_from_trash(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"Restoring email from trash: {email_id} for user: {user_id}")
+    logger.info("Gmail mail-route operation")
     try:
         await _gmail_execute(service, service.users().messages().untrash(userId='me', id=email_id))
         await invalidate_user_mail_cache(str(user_id), email_id)
         # Also consider invalidating/updating list caches to which this email was added
         return {"id": email_id, "status": "restored from trash"}
     except HttpError as e:
-        logger.exception(f"Failed to restore email {email_id} from trash for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while restoring email {email_id} from trash for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -226,18 +219,18 @@ async def delete_email(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"Permanently deleting email: {email_id} for user: {user_id}")
+    logger.info("Gmail mail-route operation")
     try:
         await _gmail_execute(service, service.users().messages().delete(userId='me', id=email_id))
         await invalidate_user_mail_cache(str(user_id), email_id)
         return {"id": email_id, "status": "permanently deleted"}
     except HttpError as e:
-        logger.exception(f"Failed to delete email {email_id} for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while deleting email {email_id} for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -268,7 +261,7 @@ async def set_star_state(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Gmail star-state update failed")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 @router.post("/send", response_model=SendEmailResponse)
@@ -278,7 +271,7 @@ async def send_email_api(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"] # For logging or other user-specific logic if needed
-    logger.info(f"User {user_id} sending email to: {email.to} | Subject: {email.subject}")
+    logger.info("Gmail mail-route operation")
     try:
         msg = MIMEText(email.body)
         msg['to'] = ', '.join(email.to)
@@ -288,7 +281,6 @@ async def send_email_api(
         # if user_email:
         #    msg['from'] = user_email
         # else:
-        #    logger.warning(f"User email not found in user_info for user {user_id} when sending email.")
 
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -299,12 +291,12 @@ async def send_email_api(
         await invalidate_user_mail_cache(str(user_id), message.get('id', ''))
         return {"id": message.get('id'), "status": "sent"}
     except HttpError as e:
-        logger.exception(f"Failed to send email for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while sending email for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -315,7 +307,7 @@ async def save_draft_api(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"User {user_id} saving draft for: {email.to} | Subject: {email.subject}")
+    logger.info("Gmail mail-route operation")
     try:
         msg = MIMEText(email.body)
         msg['to'] = ', '.join(email.to)
@@ -340,12 +332,12 @@ async def save_draft_api(
         # Invalidate draft list cache if any
         return {"id": draft['id'], "status": status_msg, "draft_id": draft['id']}
     except HttpError as e:
-        logger.exception(f"Failed to save draft for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while saving draft for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")
 
 
@@ -374,7 +366,7 @@ async def search_endpoint(
     except HttpError as exc:
         raise HTTPException(status_code=exc.resp.status, detail="Gmail request failed. Please try again.") from None
     except Exception:
-        logger.exception("Unexpected Gmail search failure")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.") from None
 
 
@@ -389,7 +381,7 @@ async def check_inbox_api(
     service: Resource = Depends(get_gmail_service)
 ):
     user_id = user_info["user_id"]
-    logger.info(f"User {user_id} checking inbox count")
+    logger.info("Gmail mail-route operation")
     try:
         # This only gets an estimate, doesn't trigger actual new mail pull
         response = await _gmail_execute(
@@ -398,13 +390,13 @@ async def check_inbox_api(
             safety=GoogleOperationSafety.READ,
         )
         count = response.get('messagesTotal', 0) # messagesUnread might also be useful
-        logger.info(f"Inbox total messages estimate for user {user_id}: {count}")
+        logger.info("Gmail mail-route operation")
         return {"status": "checked", "inbox_message_count_estimate": count}
     except HttpError as e:
-        logger.exception(f"Failed to check inbox count for user {user_id}: {_format_http_error(e)}")
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=e.resp.status, detail="Gmail request failed. Please try again.")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred while checking inbox count for user {user_id}: {e}")
+    except Exception:
+        logger.error("Gmail mail-route operation failed")
         raise HTTPException(status_code=500, detail="Mail operation failed. Please try again.")

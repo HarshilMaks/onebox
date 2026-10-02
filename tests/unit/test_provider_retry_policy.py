@@ -293,36 +293,31 @@ async def test_mark_as_read_unexpected_error_returns_500(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mark_as_read_handles_non_utf8_http_error_content_safely(monkeypatch):
-    """Non-UTF-8 bytes in HttpError content must not raise UnicodeDecodeError during logging."""
+async def test_mark_as_read_does_not_log_provider_error_content(monkeypatch):
+    """Raw Gmail error content must not be passed to route logging."""
     from fastapi import HTTPException
-    import httplib2
+    from unittest.mock import Mock
 
     service = _Gmail()
-    corrupt_content = b"\x80\xff\xfe\xfd invalid utf-8"
+    provider_body = b"SENTINEL_PRIVATE_PROVIDER_MESSAGE"
     resp = httplib2.Response({"status": "502"})
-    http_error = HttpError(resp, corrupt_content)
+    http_error = HttpError(resp, provider_body)
 
     async def explode(_service, _request, **_kwargs):
         raise http_error
 
+    logger = Mock()
     monkeypatch.setattr(google_mail, "_gmail_execute", explode)
+    monkeypatch.setattr(google_mail, "logger", logger)
 
     with pytest.raises(HTTPException) as raised:
         await google_mail.mark_as_read(
-            email_id="msg-corrupt",
+            email_id="msg-private",
             user_info={"user_id": "owner"},
             service=service,
         )
 
     assert raised.value.status_code == 502
-    assert raised.value.detail == "Gmail request failed. Please try again."
-
-
-def test_format_http_error_decodes_safely():
-    import httplib2
-    resp = httplib2.Response({"status": "400"})
-    error = HttpError(resp, b"corrupted: \xff\xfe")
-    formatted = google_mail._format_http_error(error)
-    assert "\ufffd" in formatted
+    logger.error.assert_called_once_with("Gmail mail-route operation failed")
+    assert provider_body.decode() not in repr(logger.mock_calls)
 
