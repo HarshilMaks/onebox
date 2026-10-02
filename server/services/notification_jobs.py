@@ -180,26 +180,33 @@ async def enqueue_notification(envelope: NotificationEnvelope, owner_id: UUID) -
             raise
 
 
-async def claim_notification_job() -> ClaimedNotificationJob | None:
-    """Claim one due job; expired leases transition through persisted backoff first."""
+async def claim_notification_job(owner_id: UUID) -> ClaimedNotificationJob | None:
+    """Claim one due job for one owner; expired leases use persisted backoff first."""
     now = _now()
     lease_duration = timedelta(seconds=settings.GMAIL_NOTIFICATION_LEASE_SECONDS)
     async with AsyncSessionLocal() as db:
         jobs = (
             await db.scalars(
                 select(GmailNotificationJob)
+                .join(
+                    GmailMailboxState,
+                    GmailMailboxState.mailbox_email == GmailNotificationJob.mailbox_email,
+                )
                 .where(
+                    GmailMailboxState.user_id == owner_id,
                     (
-                        (GmailNotificationJob.state == "pending")
-                        & (
-                            (GmailNotificationJob.next_attempt_at.is_(None))
-                            | (GmailNotificationJob.next_attempt_at <= now)
+                        (
+                            (GmailNotificationJob.state == "pending")
+                            & (
+                                (GmailNotificationJob.next_attempt_at.is_(None))
+                                | (GmailNotificationJob.next_attempt_at <= now)
+                            )
                         )
-                    )
-                    | (
-                        (GmailNotificationJob.state == "processing")
-                        & (GmailNotificationJob.lease_expires_at <= now)
-                    )
+                        | (
+                            (GmailNotificationJob.state == "processing")
+                            & (GmailNotificationJob.lease_expires_at <= now)
+                        )
+                    ),
                 )
                 .order_by(GmailNotificationJob.received_at, GmailNotificationJob.id)
                 .with_for_update(skip_locked=True)

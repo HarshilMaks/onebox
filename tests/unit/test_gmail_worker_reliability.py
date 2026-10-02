@@ -17,7 +17,9 @@ from server.workers import mail_notifications
 @pytest.mark.asyncio
 async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
     stop_event = asyncio.Event()
+    owner_id = uuid4()
     calls = 0
+    claimed_by = []
 
     async def heartbeat(_owner_id):
         return None
@@ -25,8 +27,9 @@ async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
     async def renew(_owner_id):
         return False
 
-    async def claim():
+    async def claim(claim_owner_id):
         nonlocal calls
+        claimed_by.append(claim_owner_id)
         calls += 1
         if calls == 1:
             raise RuntimeError("transient database failure")
@@ -50,8 +53,9 @@ async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
         ),
     )
 
-    await mail_notifications.run_notification_worker(stop_event, uuid4())
+    await mail_notifications.run_notification_worker(stop_event, owner_id)
     assert calls == 2
+    assert claimed_by == [owner_id, owner_id]
 
 
 class _PushRequest:

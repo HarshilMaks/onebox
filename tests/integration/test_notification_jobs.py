@@ -111,7 +111,7 @@ async def test_enqueue_deduplicates_before_ack_and_two_workers_claim_once(notifi
     assert await enqueue_notification(envelope, owner_id) is True
     assert await enqueue_notification(envelope, owner_id) is False
 
-    claims = await asyncio.gather(*[claim_notification_job() for _ in range(10)])
+    claims = await asyncio.gather(*[claim_notification_job(owner_id) for _ in range(10)])
     claimed = [claim for claim in claims if claim is not None]
     assert len(claimed) == 1
     assert claimed[0].history_id == 101
@@ -121,6 +121,27 @@ async def test_enqueue_deduplicates_before_ack_and_two_workers_claim_once(notifi
     assert len(jobs) == 1
     assert jobs[0].attempt_count == 1
     assert jobs[0].state == "processing"
+
+
+@pytest.mark.asyncio
+async def test_claim_refuses_jobs_owned_by_a_different_automation_user(notification_db, monkeypatch):
+    previous_owner = uuid.uuid4()
+    current_owner = uuid.uuid4()
+
+    async def configured(_owner_id):
+        return "owner@example.com"
+
+    monkeypatch.setattr(notification_jobs, "configured_automation_mailbox", configured)
+    await seed_mailbox_state(notification_db, previous_owner)
+    await enqueue_notification(
+        parse_notification_envelope(push_body(message_id="pubsub-prior-owner"), "projects/test/subscriptions/onebox"),
+        previous_owner,
+    )
+
+    assert await claim_notification_job(current_owner) is None
+    claim = await claim_notification_job(previous_owner)
+    assert claim is not None
+    assert claim.history_id == 101
 
 
 class _Request:
@@ -187,10 +208,10 @@ async def test_resync_and_retryable_triage_work_are_reclaimable(notification_db,
     await seed_mailbox_state(notification_db, owner_id)
     envelope = parse_notification_envelope(push_body(message_id="pubsub-resync"), "projects/test/subscriptions/onebox")
     await enqueue_notification(envelope, owner_id)
-    claim = await claim_notification_job()
+    claim = await claim_notification_job(owner_id)
     assert claim is not None
     await fail_job(claim, error_code="history_cursor_expired", require_resync=True)
-    reclaimed = await claim_notification_job()
+    reclaimed = await claim_notification_job(owner_id)
     assert reclaimed is not None
     assert reclaimed.id == claim.id
     await fail_job(reclaimed, error_code="resync_checkpointed", require_resync=True)
@@ -199,7 +220,7 @@ async def test_resync_and_retryable_triage_work_are_reclaimable(notification_db,
         job.attempt_count = notification_jobs.settings.GMAIL_NOTIFICATION_MAX_ATTEMPTS
         job.next_attempt_at = notification_jobs._now()
         await session.commit()
-    beyond_cap = await claim_notification_job()
+    beyond_cap = await claim_notification_job(owner_id)
     assert beyond_cap is not None
     assert beyond_cap.id == claim.id
 
@@ -415,7 +436,7 @@ async def test_attempt_limited_job_becomes_durable_resync_recovery(notification_
     await seed_mailbox_state(notification_db, owner_id)
     envelope = parse_notification_envelope(push_body(message_id="pubsub-attempt-limit"), "projects/test/subscriptions/onebox")
     await enqueue_notification(envelope, owner_id)
-    claim = await claim_notification_job()
+    claim = await claim_notification_job(owner_id)
     assert claim is not None
 
     async with notification_db() as session:
@@ -435,7 +456,7 @@ async def test_attempt_limited_job_becomes_durable_resync_recovery(notification_
         assert state.resync_required is True
         assert state.last_error_code == "history_unavailable"
 
-    recovery_claim = await claim_notification_job()
+    recovery_claim = await claim_notification_job(owner_id)
     assert recovery_claim is not None
     assert recovery_claim.id == claim.id
 
@@ -451,7 +472,7 @@ async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_
     await seed_mailbox_state(notification_db, owner_id)
     envelope = parse_notification_envelope(push_body(message_id="pubsub-stale-attempt-limit"), "projects/test/subscriptions/onebox")
     await enqueue_notification(envelope, owner_id)
-    claim = await claim_notification_job()
+    claim = await claim_notification_job(owner_id)
     assert claim is not None
 
     async with notification_db() as session:
@@ -463,7 +484,7 @@ async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_
 
     # A crashed worker first receives persisted retry backoff rather than an
     # immediate reclaim; once its due retry reaches the cap it starts resync.
-    assert await claim_notification_job() is None
+    assert await claim_notification_job(owner_id) is None
     async with notification_db() as session:
         job = await session.get(GmailNotificationJob, claim.id)
         state = await session.get(GmailMailboxState, "owner@example.com")
@@ -476,7 +497,7 @@ async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_
         job.next_attempt_at = notification_jobs._now()
         await session.commit()
 
-    assert await claim_notification_job() is None
+    assert await claim_notification_job(owner_id) is None
     async with notification_db() as session:
         job = await session.get(GmailNotificationJob, claim.id)
         state = await session.get(GmailMailboxState, "owner@example.com")
@@ -486,7 +507,7 @@ async def test_stale_attempt_limited_lease_becomes_resync_recovery(notification_
         assert state.resync_required is True
         assert state.resync_state == "required"
 
-    recovery_claim = await claim_notification_job()
+    recovery_claim = await claim_notification_job(owner_id)
     assert recovery_claim is not None
     assert recovery_claim.id == claim.id
 
@@ -504,7 +525,7 @@ async def test_retryable_notification_failure_is_not_reclaimed_until_due(notific
         parse_notification_envelope(push_body(message_id="pubsub-backoff"), "projects/test/subscriptions/onebox"),
         owner_id,
     )
-    claim = await claim_notification_job()
+    claim = await claim_notification_job(owner_id)
     assert claim is not None
     await fail_job(claim, error_code="history_unavailable")
 
@@ -517,7 +538,7 @@ async def test_retryable_notification_failure_is_not_reclaimed_until_due(notific
         job.next_attempt_at = notification_jobs._now()
         await session.commit()
 
-    retry = await claim_notification_job()
+    retry = await claim_notification_job(owner_id)
     assert retry is not None
     assert retry.id == claim.id
     assert retry.lease_token != claim.lease_token
@@ -536,10 +557,10 @@ async def test_stale_resync_transition_cannot_restore_completed_generation(notif
         parse_notification_envelope(push_body(message_id="pubsub-fenced-resync"), "projects/test/subscriptions/onebox"),
         owner_id,
     )
-    job = await claim_notification_job()
+    job = await claim_notification_job(owner_id)
     assert job is not None
     await fail_job(job, error_code="history_cursor_expired", require_resync=True)
-    trigger = await claim_notification_job()
+    trigger = await claim_notification_job(owner_id)
     assert trigger is not None
     resync = await notification_jobs.claim_mailbox_resync(trigger, owner_id)
     assert resync is not None
@@ -590,7 +611,7 @@ async def test_resync_total_limit_requires_manual_recovery_without_cursor_advanc
         parse_notification_envelope(push_body(message_id="pubsub-resync-limit"), "projects/test/subscriptions/onebox"),
         owner_id,
     )
-    job = await claim_notification_job()
+    job = await claim_notification_job(owner_id)
     assert job is not None
     await fail_job(job, error_code="history_cursor_expired", require_resync=True)
     async with notification_db() as session:
@@ -598,7 +619,7 @@ async def test_resync_total_limit_requires_manual_recovery_without_cursor_advanc
         assert state is not None
         state.resync_message_count = 1
         await session.commit()
-    trigger = await claim_notification_job()
+    trigger = await claim_notification_job(owner_id)
     assert trigger is not None
     resync = await notification_jobs.claim_mailbox_resync(trigger, owner_id)
     assert resync is not None
@@ -740,7 +761,7 @@ async def test_stale_normal_history_work_is_fenced_by_resync_generation(notifica
         parse_notification_envelope(push_body(message_id="pubsub-stale-normal-failure"), "projects/test/subscriptions/onebox"),
         owner_id,
     )
-    stale_failure = await claim_notification_job()
+    stale_failure = await claim_notification_job(owner_id)
     assert stale_failure is not None
     assert stale_failure.resync_generation == 0
 
@@ -770,7 +791,7 @@ async def test_stale_normal_history_work_is_fenced_by_resync_generation(notifica
         parse_notification_envelope(push_body(message_id="pubsub-stale-normal-complete", history="151"), "projects/test/subscriptions/onebox"),
         owner_id,
     )
-    stale_completion = await claim_notification_job()
+    stale_completion = await claim_notification_job(owner_id)
     assert stale_completion is not None
     assert stale_completion.resync_generation == 1
     async with notification_db() as session:

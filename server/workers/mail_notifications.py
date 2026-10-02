@@ -403,7 +403,7 @@ async def run_notification_worker(stop_event: asyncio.Event, owner_id: UUID) -> 
                 last_retention_cleanup = monotonic()
             await record_worker_heartbeat(owner_id)
             await renew_automation_watch(owner_id)
-            claim = await claim_notification_job()
+            claim = await claim_notification_job(owner_id)
             if claim is not None:
                 correlation_token = bind_correlation_id(f"job:{claim.id}")
                 try:
