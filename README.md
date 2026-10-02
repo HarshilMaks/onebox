@@ -435,7 +435,7 @@ To prevent resource exhaustion and Denial of Service, the API enforces strict in
 - **Mail Pagination Limits:** Capped at 100 messages per page.
 - **Pub/Sub Push Envelopes:** Capped at `PUBSUB_MAX_ENVELOPE_BYTES` (64 KB default).
 - **OAuth Callback State & Code:** Capped at 512 and 4,096 characters respectively.
-- **Inbound Mail Bodies:** Truncated at 256 KB. MIME structure traversal is bounded to 512 parts and 32 nesting levels; messages exceeding either limit return an empty body rather than an error.
+- **Inbound Mail Bodies:** Truncated at 256 KB. Headers are limited to 200 entries and 4,096 characters each; MIME structure traversal is bounded to 512 parts and 32 nesting levels. Oversized metadata is rejected before triage, while body/MIME limit overflows yield an empty body.
 
 ### Generational Mail Cache Policy
 Mail detail bodies are cached for **5 minutes**; folder views and search results are cached for **60 seconds**.

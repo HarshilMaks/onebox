@@ -6,13 +6,18 @@ import logging
 import re
 from typing import Any
 
-from server.mail.mime import MAX_BODY_BYTES, decode_base64url_text
+from server.mail.mime import MAX_BODY_BYTES, MAX_HEADER_VALUE_CHARS, decode_base64url_text
 
 
 logger = logging.getLogger(__name__)
 
 MAX_INBOUND_MIME_PART_DEPTH = 32
 MAX_INBOUND_MIME_PARTS = 512
+MAX_INBOUND_HEADERS = 200
+MAX_INBOUND_HEADER_NAME_CHARS = 128
+MAX_INBOUND_LABELS = 100
+MAX_INBOUND_LABEL_CHARS = 128
+_TRIAGE_HEADERS = frozenset({"subject", "from", "to", "date"})
 
 
 def should_process_email(email_content: dict[str, Any]) -> bool:
@@ -42,19 +47,33 @@ def extract_email_content(email_data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("missing payload")
         raw_headers = payload.get("headers")
-        if not isinstance(raw_headers, list):
-            raise ValueError("missing headers")
+        if not isinstance(raw_headers, list) or len(raw_headers) > MAX_INBOUND_HEADERS:
+            raise ValueError("missing or oversized headers")
         headers: dict[str, str] = {}
         for item in raw_headers:
             if not isinstance(item, dict):
                 raise ValueError("invalid header")
             name = item.get("name")
             value = item.get("value")
-            if not isinstance(name, str) or not isinstance(value, str):
+            if (
+                not isinstance(name, str)
+                or not isinstance(value, str)
+                or len(name) > MAX_INBOUND_HEADER_NAME_CHARS
+                or len(value) > MAX_HEADER_VALUE_CHARS
+            ):
                 raise ValueError("invalid header")
-            headers[name.lower()] = value
+            normalized_name = name.casefold()
+            if normalized_name in _TRIAGE_HEADERS:
+                headers.setdefault(normalized_name, value)
         labels = email_data.get("labelIds", [])
-        if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
+        if (
+            not isinstance(labels, list)
+            or len(labels) > MAX_INBOUND_LABELS
+            or not all(
+                isinstance(label, str) and 0 < len(label) <= MAX_INBOUND_LABEL_CHARS
+                for label in labels
+            )
+        ):
             raise ValueError("invalid labels")
         return {
             "id": email_data.get("id", ""),

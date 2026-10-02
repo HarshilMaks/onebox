@@ -218,6 +218,34 @@ def test_oversized_inbound_body_is_a_terminal_parser_error():
 
 
 @pytest.mark.parametrize(
+    "message",
+    [
+        {
+            "payload": {
+                "headers": [
+                    {"name": "Subject", "value": "x" * (mail.MAX_HEADER_VALUE_CHARS + 1)}
+                ]
+            }
+        },
+        {
+            "payload": {
+                "headers": [
+                    {"name": "X-Trace", "value": "bounded"}
+                    for _ in range(mail.MAX_INBOUND_HEADERS + 1)
+                ]
+            }
+        },
+        {
+            "labelIds": ["INBOX"] * (mail.MAX_INBOUND_LABELS + 1),
+            "payload": {"headers": [{"name": "Subject", "value": "Status"}]},
+        },
+    ],
+)
+def test_inbound_parser_rejects_oversized_metadata_before_triage(message):
+    assert mail.extract_email_content(message) == {"error": "Invalid message payload"}
+
+
+@pytest.mark.parametrize(
     ("headers", "expected_sender", "expected_subject"),
     [
         (
