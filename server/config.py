@@ -116,8 +116,8 @@ class Settings(BaseSettings):
     GMAIL_JOB_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
     GMAIL_TRIAGE_RETENTION_DAYS: int = Field(default=14, ge=1, le=3650)
     RETENTION_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600, ge=60, le=86_400)
-    # Set only for a controlled local/private network. Production otherwise
-    # requires authenticated TLS Redis; PostgreSQL TLS is always required.
+    # Set only for a controlled local/private network. Staging and production
+    # otherwise require authenticated TLS Redis; PostgreSQL TLS is always required.
     REDIS_TRUSTED_LOCAL_NETWORK: bool = False
 
     # Durable Gmail Pub/Sub ingestion/worker limits. Jobs are PostgreSQL-backed
@@ -363,24 +363,26 @@ class Settings(BaseSettings):
                     "PUBSUB_SUBSCRIPTION must be a full projects/{project}/subscriptions/{subscription} name"
                 )
 
-        if self.ENVIRONMENT is Environment.PRODUCTION:
+        if self.ENVIRONMENT in {Environment.STAGING, Environment.PRODUCTION}:
             for setting_name, url in (
                 ("OAUTH_REDIRECT_URI", self.OAUTH_REDIRECT_URI),
                 ("FRONTEND_OAUTH_CALLBACK_URI", self.FRONTEND_OAUTH_CALLBACK_URI),
             ):
                 if urlsplit(url).scheme != "https":
-                    raise ValueError(f"{setting_name} must use HTTPS in production")
+                    raise ValueError(f"{setting_name} must use HTTPS in staging or production")
             if any(urlsplit(origin).scheme != "https" for origin in self.cors_allowed_origins):
-                raise ValueError("CORS_ALLOWED_ORIGINS must use HTTPS in production")
+                raise ValueError("CORS_ALLOWED_ORIGINS must use HTTPS in staging or production")
             database_query = parse_qs(urlsplit(self.DATABASE_URL).query)
             database_tls = database_query.get("ssl", database_query.get("sslmode", [""]))[0].casefold()
             if database_tls not in {"require", "verify-ca", "verify-full"}:
-                raise ValueError("DATABASE_URL must require PostgreSQL TLS in production")
+                raise ValueError("DATABASE_URL must require PostgreSQL TLS in staging or production")
             redis_url = urlsplit(self.REDIS_URL)
             if not redis_url.password:
-                raise ValueError("REDIS_URL must include Redis authentication in production")
+                raise ValueError("REDIS_URL must include Redis authentication in staging or production")
             if not self.REDIS_TRUSTED_LOCAL_NETWORK and redis_url.scheme != "rediss":
-                raise ValueError("REDIS_URL must use rediss:// outside a trusted local network in production")
+                raise ValueError(
+                    "REDIS_URL must use rediss:// outside a trusted local network in staging or production"
+                )
 
         return self
 

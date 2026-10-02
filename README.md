@@ -114,8 +114,8 @@ flowchart TD
 ## Prerequisites
 
 - **Python 3.12+**
-- **PostgreSQL 16+** (with `pg_isready` support and TLS in production)
-- **Redis 7+** (`redis://` for development, authenticated `rediss://` for production)
+- **PostgreSQL 16+** (with `pg_isready` support and TLS in staging and production)
+- **Redis 7+** (`redis://` for development, authenticated `rediss://` for staging and production)
 - **Docker & Docker Compose** (for containerized deployments)
 - **Google Cloud Platform Project** with active APIs:
   - Gmail API (`gmail.modify`, `mail.google.com`)
@@ -217,11 +217,11 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 
 | Setting | Required | Default | Description |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | Yes | - | Async PostgreSQL URI (`postgresql+asyncpg://user:pass@host:5432/db`). Requires TLS in production. |
-| `REDIS_URL` | Yes | - | Redis connection URL (`redis://` or `rediss://`). Requires password and TLS in production. |
+| `DATABASE_URL` | Yes | - | Async PostgreSQL URI (`postgresql+asyncpg://user:pass@host:5432/db`). Requires TLS in staging and production. |
+| `REDIS_URL` | Yes | - | Redis connection URL (`redis://` or `rediss://`). Requires password and TLS in staging and production. |
 | `DATABASE_POOL_SIZE` | No | `5` | Core connection pool size for SQLAlchemy. |
 | `DATABASE_MAX_OVERFLOW` | No | `5` | Maximum overflow connections for SQLAlchemy. |
-| `REDIS_TRUSTED_LOCAL_NETWORK` | No | `false` | Allows unencrypted Redis in production only if operating inside a private VPC. |
+| `REDIS_TRUSTED_LOCAL_NETWORK` | No | `false` | Allows unencrypted Redis in staging or production only inside a controlled private VPC. |
 | `PROVIDER_RETRY_MAX_ATTEMPTS` | No | `3` | Maximum retry attempts for safe reads and idempotent writes. |
 | `PROVIDER_RETRY_DEADLINE_SECONDS` | No | `10.0` | Wall-clock deadline bounding the entire retry sequence including wait intervals. Ambiguous writes are exempt. |
 | `PROVIDER_RETRY_INITIAL_SECONDS` | No | `0.25` | Initial exponential backoff base for provider retries. |
@@ -237,7 +237,7 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `OAUTH_TOKEN_KEYRING_PATH` | If OAuth | `None` | Filepath to the read-only JSON keyring used for AES-256-GCM token encryption. |
 | `OAUTH_TOKEN_ACTIVE_KEY_ID` | If OAuth | `None` | Active key identifier in the keyring for encrypting new/refreshed tokens. |
 | `GOOGLE_OAUTH_CLIENT_SECRETS`| Yes | `onebox_oauth.json` | Path to Google OAuth 2.0 Web Client secrets JSON file. |
-| `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback redirect URI (HTTPS required in production). |
+| `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback redirect URI (HTTPS required in staging and production). |
 | `FRONTEND_OAUTH_CALLBACK_URI`| Yes | - | Frontend URL to redirect the user after OAuth completion. |
 
 ### Google Cloud & Automation Worker

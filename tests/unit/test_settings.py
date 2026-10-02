@@ -263,6 +263,23 @@ def test_provider_retry_bounds_and_production_transport_policy(settings_class):
     )
     assert secure.ENVIRONMENT.value == "production"
 
+    secure_staging = build_settings(
+        settings_class,
+        ENVIRONMENT="staging",
+        OAUTH_REDIRECT_URI="https://api.staging.example.invalid/agent/oauth/callback",
+        FRONTEND_OAUTH_CALLBACK_URI="https://app.staging.example.invalid/mail/inbox",
+        CORS_ALLOWED_ORIGINS="https://app.staging.example.invalid",
+        DATABASE_URL="postgresql+asyncpg://onebox:test-password@db.staging.example.invalid/onebox?ssl=require",
+        REDIS_URL="rediss://:redis-password@redis.staging.example.invalid:6380/0",
+    )
+    assert secure_staging.ENVIRONMENT.value == "staging"
+
+    with pytest.raises(ValidationError, match="HTTPS in staging or production"):
+        build_settings(
+            settings_class,
+            ENVIRONMENT="staging",
+        )
+
     with pytest.raises(ValidationError, match="PostgreSQL TLS"):
         build_settings(
             settings_class,
