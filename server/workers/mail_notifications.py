@@ -127,12 +127,26 @@ async def renew_automation_watch(owner_id: UUID) -> bool:
     return False
 
 
-async def _history_message_ids(service: Any, cursor: int) -> tuple[list[str], int]:
-    """Return all messageAdded IDs and the provider's final history cursor."""
+class HistoryWorkLimitExceeded(RuntimeError):
+    """Normal Gmail history exceeded the per-job bounded-work budget."""
+
+
+async def _history_message_ids(
+    service: Any,
+    cursor: int,
+    *,
+    max_messages: int = 100,
+    max_pages: int = 10,
+) -> tuple[list[str], int]:
+    """Return bounded message IDs and the provider's final history cursor."""
+    if max_messages < 1 or max_pages < 1:
+        raise ValueError("history work bounds must be positive")
+
     message_ids: list[str] = []
     seen: set[str] = set()
     page_token: str | None = None
     latest_cursor = cursor
+    page_count = 0
     while True:
         kwargs: dict[str, Any] = {
             "userId": "me",
@@ -144,6 +158,7 @@ async def _history_message_ids(service: Any, cursor: int) -> tuple[list[str], in
             kwargs["pageToken"] = page_token
         response = await execute_google_request(service.users().history().list(**kwargs), resource=service)
         response = response or {}
+        page_count += 1
         response_cursor = _history_id(response.get("historyId"))
         if response_cursor is not None:
             latest_cursor = max(latest_cursor, response_cursor)
@@ -156,11 +171,15 @@ async def _history_message_ids(service: Any, cursor: int) -> tuple[list[str], in
                 message = added.get("message") if isinstance(added, dict) else None
                 message_id = message.get("id") if isinstance(message, dict) else None
                 if isinstance(message_id, str) and message_id and message_id not in seen:
+                    if len(message_ids) >= max_messages:
+                        raise HistoryWorkLimitExceeded()
                     seen.add(message_id)
                     message_ids.append(message_id)
         page_token = response.get("nextPageToken")
         if not page_token:
             return message_ids, latest_cursor
+        if page_count >= max_pages or len(message_ids) >= max_messages:
+            raise HistoryWorkLimitExceeded()
 
 
 async def _triage_message(
@@ -351,7 +370,15 @@ async def process_notification_job(claim: ClaimedNotificationJob) -> None:
 
     try:
         service = await _gmail_service_for_owner(state.user_id)
-        message_ids, final_cursor = await _history_message_ids(service, state.history_cursor)
+        message_ids, final_cursor = await _history_message_ids(
+            service,
+            state.history_cursor,
+            max_messages=settings.GMAIL_HISTORY_MAX_MESSAGES,
+            max_pages=settings.GMAIL_HISTORY_MAX_PAGES,
+        )
+    except HistoryWorkLimitExceeded:
+        await fail_job(claim, error_code="history_work_limit_reached", require_resync=True)
+        return
     except GoogleOperationRejected as exc:
         if exc.status_code == 404:
             # Gmail history retention elapsed. Persist explicit intervention

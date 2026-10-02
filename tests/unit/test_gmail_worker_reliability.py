@@ -58,6 +58,54 @@ async def test_worker_survives_claim_failure_and_retries_iteration(monkeypatch):
     assert claimed_by == [owner_id, owner_id]
 
 
+@pytest.mark.asyncio
+async def test_history_work_limit_transitions_job_to_bounded_resync(monkeypatch):
+    owner_id = uuid4()
+    claim = mail_notifications.ClaimedNotificationJob(
+        id=uuid4(),
+        mailbox_email="owner@example.test",
+        history_id=101,
+        lease_token="lease-token",
+        resync_generation=0,
+    )
+    state = SimpleNamespace(
+        history_cursor=100,
+        resync_state="idle",
+        resync_required=False,
+        user_id=owner_id,
+    )
+    failures = []
+    history_bounds = []
+
+    async def mailbox_state(_claim):
+        return state
+
+    async def gmail_service(_owner_id):
+        return object()
+
+    async def history_ids(*_args, **kwargs):
+        history_bounds.append(kwargs)
+        raise mail_notifications.HistoryWorkLimitExceeded()
+
+    async def fail_job(received_claim, *, error_code, require_resync=False, **_kwargs):
+        failures.append((received_claim, error_code, require_resync))
+
+    monkeypatch.setattr(mail_notifications, "job_mailbox_state", mailbox_state)
+    monkeypatch.setattr(mail_notifications, "_gmail_service_for_owner", gmail_service)
+    monkeypatch.setattr(mail_notifications, "_history_message_ids", history_ids)
+    monkeypatch.setattr(mail_notifications, "fail_job", fail_job)
+
+    await mail_notifications.process_notification_job(claim)
+
+    assert failures == [(claim, "history_work_limit_reached", True)]
+    assert history_bounds == [
+        {
+            "max_messages": mail_notifications.settings.GMAIL_HISTORY_MAX_MESSAGES,
+            "max_pages": mail_notifications.settings.GMAIL_HISTORY_MAX_PAGES,
+        }
+    ]
+
+
 class _PushRequest:
     def __init__(self, headers: dict[str, str], chunks: tuple[bytes, ...] = ()) -> None:
         self.headers = headers

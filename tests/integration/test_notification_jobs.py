@@ -191,6 +191,89 @@ async def test_history_pagination_collects_all_message_work(monkeypatch):
     assert cursor == 103
 
 
+@pytest.mark.asyncio
+async def test_history_collection_stops_at_message_bound(monkeypatch):
+    class History:
+        calls = 0
+
+        def list(self, **_kwargs):
+            self.calls += 1
+            return _Request(
+                {
+                    "historyId": "102",
+                    "history": [
+                        {
+                            "id": "102",
+                            "messagesAdded": [
+                                {"message": {"id": "m-1"}},
+                                {"message": {"id": "m-2"}},
+                            ],
+                        }
+                    ],
+                }
+            )
+
+    class Users:
+        def __init__(self, history):
+            self._history = history
+
+        def history(self):
+            return self._history
+
+    class Service:
+        def __init__(self):
+            self.history = History()
+
+        def users(self):
+            return Users(self.history)
+
+    async def execute(request, **_kwargs):
+        return request.execute()
+
+    service = Service()
+    monkeypatch.setattr(mail_notifications, "execute_google_request", execute)
+
+    with pytest.raises(mail_notifications.HistoryWorkLimitExceeded):
+        await mail_notifications._history_message_ids(service, 100, max_messages=1, max_pages=10)
+
+    assert service.history.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_history_collection_stops_at_page_bound(monkeypatch):
+    class History:
+        calls = 0
+
+        def list(self, **_kwargs):
+            self.calls += 1
+            return _Request({"historyId": "102", "history": [], "nextPageToken": "more"})
+
+    class Users:
+        def __init__(self, history):
+            self._history = history
+
+        def history(self):
+            return self._history
+
+    class Service:
+        def __init__(self):
+            self.history = History()
+
+        def users(self):
+            return Users(self.history)
+
+    async def execute(request, **_kwargs):
+        return request.execute()
+
+    service = Service()
+    monkeypatch.setattr(mail_notifications, "execute_google_request", execute)
+
+    with pytest.raises(mail_notifications.HistoryWorkLimitExceeded):
+        await mail_notifications._history_message_ids(service, 100, max_messages=100, max_pages=2)
+
+    assert service.history.calls == 2
+
+
 def test_durable_lifecycle_never_stops_mailbox_watch():
     source = open("server/main.py", encoding="utf-8").read()
     assert "users().stop" not in source

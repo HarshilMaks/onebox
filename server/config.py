@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     GMAIL_RETRY_BACKOFF_INITIAL_SECONDS: int = Field(default=5, ge=1, le=3_600)
     GMAIL_RETRY_BACKOFF_MAX_SECONDS: int = Field(default=300, ge=1, le=86_400)
     GMAIL_RESYNC_MAX_MESSAGES: int = Field(default=100, ge=1, le=1_000)
+    # Normal history processing uses separate bounds so an accumulated Gmail
+    # gap cannot create unbounded in-memory or LLM work before resync.
+    GMAIL_HISTORY_MAX_MESSAGES: int = Field(default=100, ge=1, le=1_000)
+    GMAIL_HISTORY_MAX_PAGES: int = Field(default=10, ge=1, le=100)
     GMAIL_WATCH_RENEWAL_SECONDS: int = Field(default=86_400, ge=300, le=604_800)
     GMAIL_WORKER_LIVENESS_SECONDS: int = Field(default=60, ge=10, le=3_600)
 

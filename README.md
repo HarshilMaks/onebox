@@ -252,6 +252,8 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `PUBSUB_PUSH_AUDIENCE` | If worker | `None` | Expected audience in the Google-signed OIDC push authorization token. |
 | `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL` | If worker | `None` | Authorized service account email delivering Pub/Sub push requests. |
 | `GMAIL_RESYNC_MAX_MESSAGES` | No | `100` | Maximum messages recovered during history resync before entering `manual_required`. |
+| `GMAIL_HISTORY_MAX_MESSAGES` | No | `100` | Maximum normal-history messages processed by one notification job before bounded recovery. |
+| `GMAIL_HISTORY_MAX_PAGES` | No | `10` | Maximum normal-history pages read by one notification job before bounded recovery. |
 
 ---
 
