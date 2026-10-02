@@ -177,6 +177,14 @@ def test_production_requires_secure_redirects_and_a_strong_secret(settings_class
         )
 
 
+def test_checked_in_secret_placeholder_is_rejected(settings_class):
+    with pytest.raises(ValidationError, match="must be replaced with a unique random value"):
+        build_settings(
+            settings_class,
+            SECRET_KEY="REPLACE_WITH_A_RANDOM_32_BYTE_OR_LONGER_SECRET",
+        )
+
+
 def test_configuration_import_uses_repository_root_not_current_directory(tmp_path):
     environment = os.environ.copy()
     environment.update(

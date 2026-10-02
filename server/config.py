@@ -12,6 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# This documented placeholder is public and must never be accepted as an HS256 key.
+_EXAMPLE_SECRET_KEY_PLACEHOLDER = "REPLACE_WITH_A_RANDOM_32_BYTE_OR_LONGER_SECRET"
 
 
 class Environment(str, Enum):
@@ -180,8 +182,11 @@ class Settings(BaseSettings):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{info.field_name} must be configured")
         normalized = value.strip()
-        if info.field_name == "SECRET_KEY" and len(normalized.encode("utf-8")) < 32:
-            raise ValueError("SECRET_KEY must be at least 32 bytes for HS256")
+        if info.field_name == "SECRET_KEY":
+            if normalized == _EXAMPLE_SECRET_KEY_PLACEHOLDER:
+                raise ValueError("SECRET_KEY must be replaced with a unique random value")
+            if len(normalized.encode("utf-8")) < 32:
+                raise ValueError("SECRET_KEY must be at least 32 bytes for HS256")
         return normalized
 
     @field_validator("PENDING_ACTION_OPERATOR_IDS", mode="before")
