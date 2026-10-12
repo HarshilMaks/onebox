@@ -42,6 +42,7 @@ env.bak/
 .idea/
 .qodo/
 .agents/
+.claude/
 
 # secrets
 *.json
