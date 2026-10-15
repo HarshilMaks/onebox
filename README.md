@@ -572,6 +572,11 @@ make contract-check
 make image-smoke
 ```
 
+> [!NOTE]
+> Tests import the application settings, so `make test` and `make contract-check` need a configured `.env` (or the same variables exported); without one they fail with Pydantic `Field required` errors. CI's test values are in [`.github/workflows/backend.yml`](.github/workflows/backend.yml).
+>
+> The integration tests in `tests/integration/` connect to the PostgreSQL server from `DATABASE_URL`, create a temporary database per test, and drop it afterwards; the configured user needs `CREATEDB`. If PostgreSQL is not reachable they are **skipped**, not failed, so a green local run without PostgreSQL does not cover them.
+
 ---
 
 ## Project Structure
