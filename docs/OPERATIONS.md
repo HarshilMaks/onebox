@@ -65,7 +65,9 @@ events/tasks, draft replies, or send mail.
    `SERVICE_ROLE=automation_worker` only when automation is fully configured.
    `combined` is local-development convenience mode, not a production role.
 4. Check `/livez` for process liveness and `/readyz` for database schema and
-   role-required Redis readiness. `/readyz` deliberately makes no Google call.
+   role-required Redis readiness. In the worker and combined roles `/readyz`
+   also requires a valid watch, a fresh heartbeat, idle recovery state, and no
+   dead-lettered jobs. `/readyz` deliberately makes no Google call.
 5. With the configured operator JWT, check `/mail/agent/health` and
    `/mail/agent/status`. Healthy automation requires a valid persisted watch,
    fresh worker heartbeat, idle recovery state, and no terminal queue failure.

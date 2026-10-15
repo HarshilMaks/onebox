@@ -236,7 +236,7 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `JWT_AUDIENCE` | Yes | - | Expected JWT audience claim (`aud`). |
 | `OAUTH_TOKEN_KEYRING_PATH` | If OAuth | `None` | Filepath to the read-only JSON keyring used for AES-256-GCM token encryption. |
 | `OAUTH_TOKEN_ACTIVE_KEY_ID` | If OAuth | `None` | Active key identifier in the keyring for encrypting new/refreshed tokens. |
-| `GOOGLE_OAUTH_CLIENT_SECRETS`| Yes | `onebox_oauth.json` | Path to Google OAuth 2.0 Web Client secrets JSON file. |
+| `GOOGLE_OAUTH_CLIENT_SECRETS`| Yes | - | Path to Google OAuth 2.0 Web Client secrets JSON file (`.env.example` uses `onebox_oauth.json`). |
 | `OAUTH_REDIRECT_URI` | Yes | - | Backend OAuth callback redirect URI (HTTPS required in staging and production). |
 | `FRONTEND_OAUTH_CALLBACK_URI`| Yes | - | Frontend URL to redirect the user after OAuth completion. |
 
@@ -245,7 +245,7 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | Setting | Required | Default | Description |
 | --- | --- | --- | --- |
 | `GOOGLE_PROJECT_ID` | Yes | - | Google Cloud Platform project identifier. |
-| `GOOGLE_LOCATION` | Yes | `us-central1` | Google Cloud region for Vertex AI endpoints. |
+| `GOOGLE_LOCATION` | Yes | - | Google Cloud region for Vertex AI endpoints (`.env.example` uses `us-central1`). |
 | `GOOGLE_MODEL` | Yes | - | Explicit Gemini model name used by agent implementations. |
 | `PUBSUB_TOPIC` | If worker | `None` | Full GCP Pub/Sub topic path (`projects/{p}/topics/{t}`). |
 | `PUBSUB_SUBSCRIPTION` | If worker | `None` | Full GCP Pub/Sub subscription path (`projects/{p}/subscriptions/{s}`). |
@@ -547,20 +547,33 @@ make image-smoke
 
 ```
 onebox/
+├── agents.py                    # Executive, general, and streaming Gemini agent loops
 ├── server/
 │   ├── main.py                  # FastAPI application entrypoint & lifespan
 │   ├── config.py                # Typed settings, validation, and role definitions
+│   ├── auth.py                  # Verified JWT principal (user ID, email, frozen claims)
+│   ├── oauth_state.py           # One-time OAuth state stored in Redis
 │   ├── database.py              # Async SQLAlchemy engine, sessionmaker, and Base
 │   ├── models.py                # Database models (Tokens, Actions, Jobs, Watches)
+│   ├── schemas.py               # Public request/response models for the OpenAPI contract
+│   ├── action_payloads.py       # Strict typed payloads for each pending action type
 │   ├── redis_cache.py           # Generational Redis cache client and utilities
+│   ├── request_limits.py        # Request-body size limit middleware
+│   ├── logging_config.py        # Redacting log formatter and correlation IDs
 │   ├── agent_policy.py          # Immutable per-run agent authorization policy
 │   ├── agent_tools.py           # Gemini function declarations & trusted tool bindings
+│   ├── commands/
+│   │   └── backfill_oauth_credentials.py # One-off legacy plaintext token encryption
+│   ├── security/
+│   │   └── oauth_credentials.py # AES-256-GCM OAuth token codec and keyring loader
 │   ├── mail/
-│   │   ├── mime.py              # RFC 822 / MIME parsing & CID inline image decoding
-│   │   └── inbound.py           # Inbound notification triage & rule evaluation
+│   │   ├── mime.py              # Bounded MIME decoding & strict HTML sanitizing
+│   │   └── inbound.py           # Inbound message parsing & triage eligibility filter
 │   ├── integrations/
+│   │   ├── provider.py          # Bounded thread runner for blocking SDK calls
 │   │   ├── google.py            # Classified Google API retry & backoff wrapper
-│   │   ├── gmail.py             # Gmail resource builders & batch operations
+│   │   ├── gmail.py             # Gmail request dispatch by safety class & HTTP error mapping
+│   │   ├── llm.py               # Gemini (Vertex AI) generate and stream adapter
 │   │   └── redis.py             # Redis connection pools and concurrency limits
 │   ├── routes/
 │   │   ├── agent_oauth.py       # Google OAuth 2.0 authorization-code / state flows
@@ -571,6 +584,7 @@ onebox/
 │   │   ├── pending_actions.py   # Pending action staging, claiming, and reconciliation
 │   │   ├── action_handlers.py   # Executable handlers for approved pending actions
 │   │   ├── notification_jobs.py # Durable notification queue storage & leases
+│   │   ├── credentials.py       # OAuth exchange, token storage, refresh, and service building
 │   │   ├── mailbox.py           # User-facing mailbox fetch and cache services
 │   │   ├── readiness.py         # Migration and persistence health verifiers
 │   │   ├── retention.py         # Terminal record pruning routines
@@ -580,9 +594,10 @@ onebox/
 │       └── mail_notifications.py# Durable Pub/Sub notification worker & watch renewal
 ├── tools/
 │   ├── llm_tools.py             # Interactive agent tools & pending action generators
+│   ├── idempotency.py           # Canonical payload hashing and command record keys
 │   └── utils.py                 # RFC 2822 message encoders and header utilities
 ├── clients/
-│   ├── base.py                  # Vertex AI / GenAI client initializers
+│   ├── base.py                  # Base Agent class (injectable Gemini provider)
 │   └── prompt.py                # Executive and email agent system prompts
 ├── tests/
 │   ├── unit/                    # Fast isolated unit tests
@@ -597,6 +612,6 @@ onebox/
 ├── Dockerfile                   # Multi-stage hardened non-root container image
 ├── docker-compose.yaml          # Multi-container orchestration (App, Worker, DB, Redis)
 ├── Makefile                     # Common development, testing, and release targets
-└── user_config.yaml             # Triage rules, schedule preferences, and user context
+└── user_config.yaml             # Agent profile: identity, timezone, and preferences
 ```
 
