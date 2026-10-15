@@ -309,7 +309,7 @@ Provides safe diagnostic telemetry on queue depths, lease states, and history re
 
 ### 3. Interactive Executive Agent
 
-Executes multi-turn Gemini reasoning with strict read-only tool inspection:
+Runs the tool-using Gemini agent for up to 5 turns. Calendar lookups run immediately; a send, reply, event, or task is staged as a pending action and the run stops with the action ID:
 
 ```http
 POST /executive/ HTTP/1.1
@@ -325,7 +325,7 @@ Content-Type: application/json
 **Response (200 OK):**
 ```json
 {
-  "result": "I have verified your availability and staged a calendar event for tomorrow at 3:00 PM. Please review and approve pending action 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d."
+  "result": "Approval required. Approve action 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d to continue."
 }
 ```
 
@@ -363,18 +363,22 @@ Host: localhost:8000
 Authorization: Bearer <JWT_TOKEN>
 ```
 
-**Response (200 OK):**
+**Response (200 OK, abridged):**
 ```json
 {
   "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   "action_type": "create_event",
   "status": "succeeded",
-  "summary": "Create Calendar Event: Sync to review roadmap items",
+  "summary": "Create event 'Roadmap review sync' from 2026-10-16T15:00:00-04:00 to 2026-10-16T15:45:00-04:00 with attendees sarah@example.com",
   "result": {
-    "event_id": "c198a28f7e2a9b"
-  }
+    "external_id": "ob3f1c9a0d7e2b4c6a8f0e1d3c5b7a9f2e4d6c8b0a",
+    "provider": "calendar"
+  },
+  "attempt_count": 1
 }
 ```
+
+The full response schema is `PendingActionResponse` in [`docs/openapi.json`](docs/openapi.json). If the action was not claimable (already processed, rejected, or expired), the endpoint returns its current state without dispatching again.
 
 ### 6. Reconcile Ambiguous Action
 
@@ -386,17 +390,20 @@ Host: localhost:8000
 Authorization: Bearer <JWT_TOKEN>
 ```
 
-**Response (200 OK):**
+**Response (200 OK, abridged):**
 ```json
 {
   "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "action_type": "create_event",
   "status": "succeeded",
-  "reconciliation_evidence": {
-    "discovered_provider_id": "c198a28f7e2a9b",
-    "verified_at": "2026-09-11T19:30:00Z"
+  "result": {
+    "external_id": "ob3f1c9a0d7e2b4c6a8f0e1d3c5b7a9f2e4d6c8b0a",
+    "provider": "calendar"
   }
 }
 ```
+
+Reconciliation only looks up the deterministic provider marker; it never writes to the provider again. The lookup evidence is stored server-side with the action and its audit events and is not returned in the response. If the outcome is still unknown, the action stays `reconciliation_required` with an updated `reconciliation_reason`. The caller's user ID must be listed in `PENDING_ACTION_OPERATOR_IDS`.
 
 ### Pending Action Lifecycle
 
@@ -408,11 +415,12 @@ stateDiagram-v2
 
     pending --> processing : POST /actions/{id}/approve\n(user authorized)
     pending --> rejected : POST /actions/{id}/reject
-    pending --> expired : TTL elapsed
+    pending --> expired : Approve after the 15-minute TTL
+    pending --> reconciliation_required : Payload integrity check failed at approval
 
     processing --> succeeded : Provider write confirmed
-    processing --> failed : Terminal provider error
-    processing --> reconciliation_required : Ambiguous write result\n(timeout · transport uncertainty)
+    processing --> failed : Confirmed provider rejection\nor failure before dispatch
+    processing --> reconciliation_required : Ambiguous write result\n(timeout · transport uncertainty)\nor 2-minute processing lease expired
 
     reconciliation_required --> succeeded : POST /actions/{id}/reconcile\n(operator verified success)
     reconciliation_required --> failed : POST /actions/{id}/reconcile\n(operator confirmed failure)
