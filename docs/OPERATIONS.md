@@ -86,7 +86,11 @@ If bounded history recovery reaches `GMAIL_RESYNC_MAX_MESSAGES`, the persisted
 state becomes `manual_required` and the cursor is intentionally not advanced.
 Investigate the queue/status data, establish a safe mailbox baseline under the
 owner's approved procedure, and only then resume automation. This prevents
-silent message loss.
+silent message loss. While the state is `manual_required`, every new
+notification job is dead-lettered with `resync_manual_required`, and worker
+readiness reports `automation_recovery_required`. There is currently no API
+endpoint or command that leaves `manual_required`; resuming requires a
+reviewed, direct change to the mailbox's `gmail_mailbox_states` row.
 
 An ambiguous provider write becomes `reconciliation_required`; it is never
 blindly retried. An authorized operator calls
@@ -110,5 +114,5 @@ From a clean checkout, install the hashed lock, regenerate/check the OpenAPI
 artifact, run Ruff, compilation, tests, migration upgrade/check, Compose
 rendering, image smoke checks, and local secret/image scanning. CI runs the
 same non-cloud code, contract, migration, image, and committed-history checks.
-Owner-supplied non-production credentials are still required for the separate
-manual staging smoke gate described in the remediation plan.
+A staging smoke test with owner-supplied non-production Google credentials is
+still a separate manual step; it is not automated in this repository.
