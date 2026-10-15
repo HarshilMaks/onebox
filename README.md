@@ -158,13 +158,20 @@ source .venv/bin/activate
 cp .env.example .env
 ```
 
-Configure `.env` with your PostgreSQL connection, Redis URL, JWT secrets, and Google credentials. For local development, minimum requirements are:
-- `DATABASE_URL=postgresql+asyncpg://onebox:password@localhost:5432/onebox`
-- `REDIS_URL=redis://localhost:6379/0`
-- `SECRET_KEY=<32-byte-hex-secret>`
-- `GOOGLE_PROJECT_ID=<gcp-project-id>`
-- `OAUTH_TOKEN_KEYRING_PATH=./onebox-oauth-token-keyring.json`
-- `OAUTH_TOKEN_ACTIVE_KEY_ID=<key-id>`
+`.env.example` already sets working local values for the JWT issuer/audience, OAuth redirect URIs, Google location and model, and CORS. Every setting without a default must stay present, and unknown names fail startup. Before the first run, change these:
+- `DATABASE_URL`: replace `REPLACE_WITH_PASSWORD` with your local PostgreSQL password.
+- `SECRET_KEY`: replace the placeholder (which is rejected at startup) with at least 32 bytes, for example `openssl rand -hex 32`.
+- `GOOGLE_PROJECT_ID`: your Google Cloud project ID.
+- `GOOGLE_OAUTH_CLIENT_SECRETS`: place your OAuth Web Client JSON at `onebox_oauth.json` in the repo root (it is gitignored), or point this at another path.
+- `OAUTH_TOKEN_KEYRING_PATH` and `OAUTH_TOKEN_ACTIVE_KEY_ID`: uncomment both. Without them, Google connect and token loading fail closed. Create a local keyring outside version control (all `*.json` files are gitignored):
+
+```bash
+python3 -c 'import base64,json,os; print(json.dumps({"local-key-1": base64.urlsafe_b64encode(os.urandom(32)).decode()}))' > onebox-oauth-token-keyring.json
+chmod 600 onebox-oauth-token-keyring.json
+# then in .env:
+# OAUTH_TOKEN_KEYRING_PATH=onebox-oauth-token-keyring.json
+# OAUTH_TOKEN_ACTIVE_KEY_ID=local-key-1
+```
 
 ### 3. Start Local Redis
 
