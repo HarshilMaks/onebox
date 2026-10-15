@@ -233,6 +233,13 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `PROVIDER_RETRY_DEADLINE_SECONDS` | No | `10.0` | Wall-clock deadline bounding the entire retry sequence including wait intervals. Ambiguous writes are exempt. |
 | `PROVIDER_RETRY_INITIAL_SECONDS` | No | `0.25` | Initial exponential backoff base for provider retries. |
 | `PROVIDER_RETRY_MAX_SECONDS` | No | `2.0` | Maximum per-attempt backoff cap before jitter. |
+| `PROVIDER_TIMEOUT_SECONDS` | No | `20.0` | Deadline for each Google, Gemini, and Redis operation. |
+| `PROVIDER_MAX_CONCURRENCY` | No | `8` | Worker threads per provider adapter (Google, Gemini). |
+| `REDIS_MAX_CONCURRENCY` | No | `16` | Maximum concurrent Redis operations per process. |
+| `MAX_REQUEST_BODY_BYTES` | No | `1048576` | HTTP request body limit enforced before JSON parsing. |
+| `LLM_STREAM_TIMEOUT_SECONDS` | No | `90.0` | Overall deadline for one streamed Gemini response. |
+| `LLM_STREAM_IDLE_TIMEOUT_SECONDS` | No | `20.0` | Maximum wait between streamed chunks. |
+| `CORS_ALLOWED_ORIGINS` | No | `""` | Comma-separated exact browser origins (no paths). Empty allows no cross-origin requests. HTTPS required in staging and production. |
 
 ### Authentication & Token Security
 
@@ -261,6 +268,14 @@ The application uses typed Pydantic settings (`server/config.py`) that fail fast
 | `GMAIL_RESYNC_MAX_MESSAGES` | No | `100` | Maximum messages recovered during history resync before entering `manual_required`. |
 | `GMAIL_HISTORY_MAX_MESSAGES` | No | `100` | Maximum normal-history messages processed by one notification job before bounded recovery. |
 | `GMAIL_HISTORY_MAX_PAGES` | No | `10` | Maximum normal-history pages read by one notification job before bounded recovery. |
+| `GMAIL_NOTIFICATION_LEASE_SECONDS` | No | `120` | Lease length for a claimed notification job, message triage, resync, or watch renewal. |
+| `GMAIL_NOTIFICATION_MAX_ATTEMPTS` | No | `5` | Job attempts before the mailbox switches to bounded resync. |
+| `GMAIL_RETRY_BACKOFF_INITIAL_SECONDS` / `GMAIL_RETRY_BACKOFF_MAX_SECONDS` | No | `5` / `300` | Exponential backoff range for job, triage, resync, and watch retries. |
+| `GMAIL_WATCH_RENEWAL_SECONDS` | No | `86400` | Renew the Gmail watch when it expires within this window. |
+| `GMAIL_WORKER_LIVENESS_SECONDS` | No | `60` | Heartbeat age after which health and readiness report the worker as stale. |
+| `PUBSUB_MAX_ENVELOPE_BYTES` | No | `65536` | Maximum Pub/Sub push body size. |
+| `PENDING_ACTION_RETENTION_DAYS` | No | `30` | Days to keep terminal pending actions. |
+| `GMAIL_JOB_RETENTION_DAYS` / `GMAIL_TRIAGE_RETENTION_DAYS` | No | `14` / `14` | Days to keep terminal notification jobs and triage records. |
 
 ---
 
