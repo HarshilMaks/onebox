@@ -273,7 +273,7 @@ Returns `200 OK` if the process is up.
 GET /readyz HTTP/1.1
 Host: localhost:8000
 ```
-Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and Redis is responsive. Otherwise it returns `503 Service Unavailable` with a machine-readable reason. Makes zero external Google API calls.
+Returns `200 OK` if PostgreSQL is reachable and migrated to the latest Alembic revision, and (for the `api` and `combined` roles) Redis is responsive. In the `automation_worker` and `combined` roles it also requires a valid Gmail watch, a fresh worker heartbeat, idle recovery state, and no dead-lettered notification jobs. Otherwise it returns `503 Service Unavailable` with a machine-readable reason (`database_or_schema_unavailable`, `redis_unavailable`, `automation_watch_unavailable`, `automation_worker_stale`, or `automation_recovery_required`). Makes zero external Google API calls.
 
 **Ready response (200 OK):**
 ```json
@@ -298,7 +298,7 @@ GET /mail/agent/health HTTP/1.1
 Host: localhost:8000
 Authorization: Bearer <JWT_TOKEN>
 ```
-Reports automation health for the authorized global operator. It returns `200 OK` with the health verdict in the `status` and `gmail_service_status` fields; both report healthy/ready only when a valid unexpired Gmail watch and fresh worker heartbeat exist.
+Reports automation health for the authorized global operator (the JWT subject must equal `AUTOMATION_OWNER_ID`). It returns `200 OK` with the health verdict in the `status` and `gmail_service_status` fields; both report healthy/ready only when a valid unexpired Gmail watch with no renewal error, a fresh worker heartbeat, idle recovery state, and no dead-lettered notification jobs all exist. The `detail` field names the first failing condition.
 
 ```http
 GET /mail/agent/status HTTP/1.1
@@ -331,7 +331,7 @@ Content-Type: application/json
 
 ### 4. Agent Event Streaming (SSE)
 
-Streams real-time agent thoughts and structured events via Server-Sent Events (`text/event-stream`):
+Streams model text and structured events via Server-Sent Events (`text/event-stream`). The streaming agent cannot read mail; its only tools are `send_email` and `create_task`, and both stage a pending action:
 
 ```http
 POST /generate-stream/ HTTP/1.1
@@ -340,18 +340,20 @@ Authorization: Bearer <JWT_TOKEN>
 Content-Type: application/json
 
 {
-  "input": "Summarize my unread emails from this morning"
+  "input": "Add a task to review the Q3 budget on Friday"
 }
 ```
 
 **SSE Stream Output:**
 ```
-data: {"event": "token", "content": "Querying inbox..."}
+data: {"event": "token", "content": "Creating a task for the Q3 budget review."}
 
-data: {"event": "token", "content": "You have 3 unread messages..."}
+data: {"event": "tool_result", "content": "Approval required. Approve action 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d to continue."}
 
 data: {"event": "done", "content": ""}
 ```
+
+Event types are `token`, `tool_result`, `error`, and `done`. `error` frames also carry an `error_code` (for example `llm_timeout` or `tool_unavailable`), and the stream ends after `done` or `error`. Comment lines (`: heartbeat`) keep idle connections open.
 
 ### 5. Approve Pending Action
 
@@ -447,7 +449,7 @@ To prevent resource exhaustion and Denial of Service, the API enforces strict in
 
 ### Generational Mail Cache Policy
 Mail detail bodies are cached for **5 minutes**; folder views and search results are cached for **60 seconds**.
-- **Atomic Generation Invalidation:** Each mail state mutation (marking read, moving to trash, starring) atomically advances the user's cache generation integer.
+- **Atomic Generation Invalidation:** Each direct `/mail` mutation endpoint (read/unread, trash/restore, delete, star, send) atomically advances the user's cache generation integer. Draft saves and agent-initiated writes do not currently invalidate the cache, so those changes appear once the cached entries expire.
 - **No Wildcard Scans:** Prevents blocking Redis with dangerous `KEYS *` operations.
 - **Fail-Open Behavior:** A Redis outage or serialization failure is treated as a cache miss and does not block mail fetching.
 
