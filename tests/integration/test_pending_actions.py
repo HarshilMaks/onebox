@@ -5,7 +5,7 @@ import asyncio
 import base64
 import os
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from typing import Any
 
@@ -28,6 +28,7 @@ from server.services.pending_actions import (
     execute_claimed_action,
     finalize_pre_dispatch_failure,
     get_pending_action,
+    list_pending_actions,
     reject_pending_action,
 )
 
@@ -547,3 +548,88 @@ async def test_retention_cleanup_removes_only_old_terminal_records(pending_db, o
         assert await session.get(PendingAction, reconciliation_action["id"]) is not None
         assert await session.scalar(text("SELECT count(*) FROM gmail_notification_jobs")) == 1
         assert await session.scalar(text("SELECT count(*) FROM gmail_triage_work")) == 1
+
+
+async def _stage_email(owner: uuid.UUID, label: str) -> dict[str, Any]:
+    return await create_pending_action(
+        str(owner),
+        ACTION_SEND_EMAIL,
+        email_payload(label),
+        command_key=f"list-test-{label}".ljust(16, "-"),
+    )
+
+
+async def _set_columns(sessions, action_id, **columns) -> None:
+    async with sessions() as db:
+        row = await db.get(PendingAction, action_id)
+        for name, value in columns.items():
+            setattr(row, name, value)
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_listing_is_owner_scoped_status_filtered_and_summary_only(pending_db, owner_id):
+    other_owner = uuid.uuid4()
+    first = await _stage_email(owner_id, "mine-1")
+    second = await _stage_email(owner_id, "mine-2")
+    theirs = await _stage_email(other_owner, "theirs")
+    await reject_pending_action(first["id"], owner_id)
+
+    pending = await list_pending_actions(owner_id, status="pending", limit=20)
+    rejected = await list_pending_actions(owner_id, status="rejected", limit=20)
+    others = await list_pending_actions(other_owner, status="pending", limit=20)
+    nothing = await list_pending_actions(uuid.uuid4(), status="pending", limit=20)
+
+    assert [item["id"] for item in pending["actions"]] == [second["id"]]
+    assert [item["id"] for item in rejected["actions"]] == [first["id"]]
+    assert [item["id"] for item in others["actions"]] == [theirs["id"]]
+    assert nothing == {"actions": [], "next_page_token": None}
+    # Summaries never carry the payload (email bodies) or internal attempt state.
+    assert set(pending["actions"][0]) == {
+        "id", "action_type", "summary", "status", "created_at", "expires_at", "is_expired",
+    }
+
+
+@pytest.mark.asyncio
+async def test_keyset_pagination_orders_newest_first_without_gaps_or_duplicates(pending_db, owner_id):
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamps = [0, 1, 2, 2, 3]  # two rows share a timestamp: the id tie-breaker must separate them
+    rows = []
+    for index, minutes in enumerate(stamps):
+        action = await _stage_email(owner_id, f"page-{index}")
+        await _set_columns(pending_db, action["id"], created_at=base + timedelta(minutes=minutes))
+        rows.append((base + timedelta(minutes=minutes), action["id"]))
+    expected = [action_id for _, action_id in sorted(rows, reverse=True)]
+
+    seen, sizes, token = [], [], None
+    while True:
+        page = await list_pending_actions(owner_id, status="pending", limit=2, page_token=token)
+        seen += [item["id"] for item in page["actions"]]
+        sizes.append(len(page["actions"]))
+        token = page["next_page_token"]
+        if token is None:
+            break
+
+    assert seen == expected
+    assert sizes == [2, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_pagination_is_stable_when_a_new_action_arrives_between_pages(pending_db, owner_id):
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ids = []
+    for index in range(4):
+        action = await _stage_email(owner_id, f"stable-{index}")
+        await _set_columns(pending_db, action["id"], created_at=base + timedelta(minutes=index))
+        ids.append(action["id"])
+
+    first_page = await list_pending_actions(owner_id, status="pending", limit=2)
+    newcomer = await _stage_email(owner_id, "stable-newcomer")  # newest row: sorts before page 1
+    second_page = await list_pending_actions(
+        owner_id, status="pending", limit=2, page_token=first_page["next_page_token"]
+    )
+
+    assert [item["id"] for item in first_page["actions"]] == [ids[3], ids[2]]
+    assert [item["id"] for item in second_page["actions"]] == [ids[1], ids[0]]
+    assert newcomer["id"] not in {item["id"] for item in second_page["actions"]}
+    assert second_page["next_page_token"] is None
