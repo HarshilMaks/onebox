@@ -164,6 +164,39 @@ export interface PendingActionPathParams {
   action_id: string;
 }
 
+/** Every lifecycle state the backend can store for a pending action. */
+export type PendingActionStatus =
+  | "pending"
+  | "processing"
+  | "succeeded"
+  | "failed"
+  | "rejected"
+  | "expired"
+  | "reconciliation_required";
+
+/** Summary of one of the caller's own actions; the payload is only on the detail route. */
+export interface PendingActionListItem {
+  id: string;
+  action_type: "send_email" | "send_reply" | "create_event" | "create_task";
+  summary: string;
+  status: PendingActionStatus;
+  created_at: string;
+  expires_at: string;
+  /** True when a stored `pending` action is past its expiry; listing never rewrites the row. */
+  is_expired: boolean;
+}
+
+export interface PendingActionPage {
+  actions: PendingActionListItem[];
+  next_page_token?: string | null;
+}
+
+export interface PendingActionListQuery {
+  status: PendingActionStatus; // required
+  limit?: number; // default 20, 1-100
+  page_token?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth / agent connection schemas
 // ---------------------------------------------------------------------------
