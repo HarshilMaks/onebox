@@ -3,7 +3,7 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from googleapiclient.discovery import Resource
 from pydantic import BaseModel, Field
@@ -16,7 +16,9 @@ from server.schemas import (
     AgentErrorResponse,
     AgentStreamEvent,
     AgentSuccessResponse,
+    PendingActionPage,
     PendingActionResponse,
+    PendingActionStatus,
 )
 from server.integrations.google import GoogleProviderError
 from server.integrations.llm import (
@@ -27,6 +29,7 @@ from server.integrations.llm import (
 from server.agent_policy import INTERACTIVE_EXECUTIVE_POLICY, INTERACTIVE_STREAM_POLICY
 from server.config import settings
 from server.services.pending_actions import (
+    InvalidPageToken,
     PendingActionInvalidState,
     PendingActionNotFound,
     claim_pending_action,
@@ -34,6 +37,7 @@ from server.services.pending_actions import (
     finalize_pre_dispatch_failure,
     get_pending_action,
     get_pending_action_for_reconciliation,
+    list_pending_actions,
     reconcile_pending_action,
     reject_pending_action,
 )
@@ -122,6 +126,28 @@ async def require_pending_action_operator(
         logger.warning("Denied pending-action reconciliation to non-operator")
         raise HTTPException(status_code=403, detail="Not authorized to reconcile pending actions")
     return user_info
+
+
+@router.get("/actions", response_model=PendingActionPage)
+async def list_pending_actions_endpoint(
+    status: PendingActionStatus = Query(..., description="Lifecycle status to list; required."),
+    limit: int = Query(20, ge=1, le=100, description="Max number of actions per page"),
+    page_token: str | None = Query(default=None, min_length=1, max_length=512, description="Pagination token"),
+    user_info: dict = Depends(get_current_user_info),
+):
+    """List the caller's own actions in one status, newest first, without payloads."""
+    try:
+        return await list_pending_actions(
+            user_info["user_id"],
+            status=status.value,
+            limit=limit,
+            page_token=page_token,
+        )
+    except InvalidPageToken:
+        raise HTTPException(
+            status_code=422,
+            detail=AgentErrorResponse(error="validation_error", detail="Invalid page token.").model_dump(),
+        ) from None
 
 
 @router.get("/actions/{action_id}", response_model=PendingActionResponse)

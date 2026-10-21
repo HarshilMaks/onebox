@@ -507,6 +507,78 @@
         "title": "OAuthStartResponse",
         "type": "object"
       },
+      "PendingActionListItem": {
+        "description": "Summary of one owner's action. The payload is only returned by the detail route.",
+        "properties": {
+          "action_type": {
+            "$ref": "#/components/schemas/PendingActionType"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_expired": {
+            "title": "Is Expired",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingActionStatus"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action_type",
+          "summary",
+          "status",
+          "created_at",
+          "expires_at",
+          "is_expired"
+        ],
+        "title": "PendingActionListItem",
+        "type": "object"
+      },
+      "PendingActionPage": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PendingActionListItem"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "title": "PendingActionPage",
+        "type": "object"
+      },
       "PendingActionResponse": {
         "description": "Immutable, owner-bound external action awaiting or reflecting approval.",
         "properties": {
@@ -848,6 +920,89 @@
           }
         },
         "summary": "Root"
+      }
+    },
+    "/actions": {
+      "get": {
+        "description": "List the caller's own actions in one status, newest first, without payloads.",
+        "operationId": "list_pending_actions_endpoint_actions_get",
+        "parameters": [
+          {
+            "description": "Lifecycle status to list; required.",
+            "in": "query",
+            "name": "status",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PendingActionStatus",
+              "description": "Lifecycle status to list; required."
+            }
+          },
+          {
+            "description": "Max number of actions per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Max number of actions per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pagination token",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pagination token",
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingActionPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Pending Actions Endpoint",
+        "tags": [
+          "AI Agents"
+        ]
       }
     },
     "/actions/{action_id}": {
