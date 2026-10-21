@@ -429,6 +429,38 @@ Authorization: Bearer <JWT_TOKEN>
 
 Reconciliation only looks up the deterministic provider marker; it never writes to the provider again. The lookup evidence is stored server-side with the action and its audit events and is not returned in the response. If the outcome is still unknown, the action stays `reconciliation_required` with an updated `reconciliation_reason`. The caller's user ID must be listed in `PENDING_ACTION_OPERATOR_IDS`.
 
+### 7. List Your Actions
+
+Lists the caller's own actions in one lifecycle status, newest first, as summaries. The owner always comes from the JWT; there is no `user_id` parameter. The `payload` (for example an email body) is not included: fetch one action with `GET /actions/{action_id}` to see it.
+
+```http
+GET /actions?status=pending&limit=20 HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (200 OK, abridged):**
+```json
+{
+  "actions": [
+    {
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "action_type": "create_event",
+      "summary": "Create event 'Roadmap review sync' from 2026-10-16T15:00:00-04:00 to 2026-10-16T15:45:00-04:00 with attendees sarah@example.com",
+      "status": "pending",
+      "created_at": "2026-10-16T14:50:12.481516Z",
+      "expires_at": "2026-10-16T15:05:12.481516Z",
+      "is_expired": false
+    }
+  ],
+  "next_page_token": null
+}
+```
+
+- `status` is required and must be one of `pending`, `processing`, `succeeded`, `failed`, `rejected`, `expired`, or `reconciliation_required`. Anything else returns `422`.
+- `limit` is 1-100 (default 20). When more actions exist, `next_page_token` is set; send it back as `page_token` to get the next page. It is `null` on the last page. Paging is keyset-based, so actions created between requests never cause duplicates or gaps. A malformed `page_token` returns `422`.
+- A pending action expires 15 minutes after it is created, but its stored status only changes to `expired` when someone tries to approve it. `is_expired: true` marks a stored `pending` action that is already past its deadline; listing never modifies any row.
+
 ### Pending Action Lifecycle
 
 Every external mutation (send email, create event, create task, send reply) follows this state machine. No external write is dispatched without an explicit `approve` call.
