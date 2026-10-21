@@ -259,6 +259,7 @@ export const ONEBOX_API_ENDPOINTS = {
   invokeExecutiveAgent: { method: "POST", path: "/executive/", auth: "jwt" } as const,
   invokeGeneralAgent: { method: "POST", path: "/generate-content/", auth: "jwt" } as const,
   streamGeneralAgent: { method: "POST", path: "/generate-stream/", auth: "jwt" } as const,
+  listPendingActions: { method: "GET", path: "/actions", auth: "jwt" } as const,
   getPendingAction: { method: "GET", path: "/actions/{action_id}", auth: "jwt" } as const,
   approvePendingAction: { method: "POST", path: "/actions/{action_id}/approve", auth: "jwt" } as const,
   rejectPendingAction: { method: "POST", path: "/actions/{action_id}/reject", auth: "jwt" } as const,
@@ -299,6 +300,7 @@ export interface OneboxApiResponse {
   invokeExecutiveAgent: AgentSuccessResponse;
   invokeGeneralAgent: AgentSuccessResponse;
   streamGeneralAgent: AgentStreamEvent; // one event per SSE frame, not a single response body
+  listPendingActions: PendingActionPage;
   getPendingAction: PendingActionResponse;
   approvePendingAction: PendingActionResponse;
   rejectPendingAction: PendingActionResponse;
