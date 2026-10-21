@@ -633,3 +633,41 @@ async def test_pagination_is_stable_when_a_new_action_arrives_between_pages(pend
     assert [item["id"] for item in second_page["actions"]] == [ids[1], ids[0]]
     assert newcomer["id"] not in {item["id"] for item in second_page["actions"]}
     assert second_page["next_page_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_exactly_one_full_page_has_no_next_token(pending_db, owner_id):
+    await _stage_email(owner_id, "full-1")
+    await _stage_email(owner_id, "full-2")
+
+    page = await list_pending_actions(owner_id, status="pending", limit=2)
+
+    assert len(page["actions"]) == 2
+    assert page["next_page_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_listing_flags_expired_pending_rows_without_rewriting_them(pending_db, owner_id):
+    stale = await _stage_email(owner_id, "stale")
+    fresh = await _stage_email(owner_id, "fresh")
+    await _set_columns(pending_db, stale["id"], expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    page = await list_pending_actions(owner_id, status="pending", limit=20)
+
+    flags = {item["id"]: item["is_expired"] for item in page["actions"]}
+    assert flags == {stale["id"]: True, fresh["id"]: False}
+    # Reading must not change data: the stale row is still stored as pending.
+    assert (await get_pending_action(stale["id"], owner_id))["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_another_owners_page_token_cannot_widen_the_owner_filter(pending_db, owner_id):
+    other_owner = uuid.uuid4()
+    mine = await _stage_email(owner_id, "scope-mine")
+    for index in range(3):
+        await _stage_email(other_owner, f"scope-other-{index}")
+    foreign_token = (await list_pending_actions(other_owner, status="pending", limit=1))["next_page_token"]
+
+    page = await list_pending_actions(owner_id, status="pending", limit=20, page_token=foreign_token)
+
+    assert {item["id"] for item in page["actions"]} <= {mine["id"]}
