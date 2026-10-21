@@ -75,6 +75,28 @@ def test_checked_in_search_client_contract_matches_the_paginated_backend_respons
     assert "searchEmails: EmailPage;" in client_contract
 
 
+def test_checked_in_pending_action_list_contract_matches_the_backend():
+    schema = app.openapi()
+    operation = schema["paths"]["/actions"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert set(parameters) == {"status", "limit", "page_token"}
+    assert parameters["status"]["required"] is True
+    assert parameters["limit"]["schema"]["maximum"] == 100
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "PendingActionPage"
+    )
+    item = schema["components"]["schemas"]["PendingActionListItem"]
+    assert "payload" not in item["properties"]
+    assert "is_expired" in item["required"]
+
+    client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
+    assert "export interface PendingActionListItem" in client_contract
+    assert "is_expired: boolean;" in client_contract
+    assert "listPendingActions: PendingActionPage;" in client_contract
+    assert '| "reconciliation_required";' in client_contract
+
+
 def test_checked_in_star_client_contract_matches_the_required_state_request():
     schema = app.openapi()
     star_operation = schema["paths"]["/mail/emails/{email_id}/star"]["post"]
