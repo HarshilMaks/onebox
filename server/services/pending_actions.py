@@ -11,7 +11,7 @@ from email.utils import getaddresses
 from typing import Any, Mapping
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from server.action_payloads import canonicalize_action_payload
@@ -356,6 +356,66 @@ def _decode_page_token(token: str) -> tuple[datetime, UUID]:
     if created_at.tzinfo is None:
         raise InvalidPageToken()
     return created_at, action_id
+
+
+async def list_pending_actions(
+    user_id: UUID,
+    *,
+    status: str,
+    limit: int,
+    page_token: str | None = None,
+) -> dict[str, Any]:
+    """List one owner's actions in one status, newest first, as summaries.
+
+    Ownership comes only from `user_id` (the verified JWT subject); a page token can
+    move the position within the owner's own rows but never widens the owner filter.
+    Pagination is keyset-based on (created_at, id) so rows created between page
+    requests cannot cause duplicates or gaps. This is read-only: a `pending` row
+    past `expires_at` is reported with `is_expired` rather than being rewritten.
+    """
+    conditions = [PendingAction.user_id == user_id, PendingAction.status == status]
+    if page_token is not None:
+        cursor_created_at, cursor_id = _decode_page_token(page_token)
+        conditions.append(
+            tuple_(PendingAction.created_at, PendingAction.id) < tuple_(cursor_created_at, cursor_id)
+        )
+
+    statement = (
+        # Summary columns only: `payload` holds full email bodies and is never loaded here.
+        select(
+            PendingAction.id,
+            PendingAction.action_type,
+            PendingAction.summary,
+            PendingAction.status,
+            PendingAction.created_at,
+            PendingAction.expires_at,
+        )
+        .where(*conditions)
+        .order_by(PendingAction.created_at.desc(), PendingAction.id.desc())
+        .limit(limit + 1)  # one extra row tells us whether another page exists
+    )
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(statement)).all()
+
+    now = _now()
+    page = rows[:limit]
+    return {
+        "actions": [
+            {
+                "id": row.id,
+                "action_type": row.action_type,
+                "summary": row.summary,
+                "status": row.status,
+                "created_at": row.created_at,
+                "expires_at": row.expires_at,
+                "is_expired": row.status == "pending" and row.expires_at <= now,
+            }
+            for row in page
+        ],
+        "next_page_token": (
+            _encode_page_token(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+        ),
+    }
 
 
 async def reject_pending_action(action_id: UUID, user_id: UUID) -> dict[str, Any]:
