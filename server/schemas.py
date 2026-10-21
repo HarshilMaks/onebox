@@ -245,3 +245,18 @@ class PendingActionResponse(BaseModel):
     lease_expires_at: Optional[datetime] = None
     reconciliation_reason: Optional[str] = None
     reconciliation_required_at: Optional[datetime] = None
+
+
+class PendingActionListItem(BaseModel):
+    """Summary of one owner's action. The payload is only returned by the detail route."""
+
+    id: UUID
+    action_type: PendingActionType
+    summary: str
+    status: PendingActionStatus
+    created_at: datetime
+    expires_at: datetime
+    # Expiry is applied lazily on approval, so a stored `pending` row can be past its
+    # deadline. Listing reports that without changing the row.
+    is_expired: bool
+
