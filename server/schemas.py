@@ -260,3 +260,7 @@ class PendingActionListItem(BaseModel):
     # deadline. Listing reports that without changing the row.
     is_expired: bool
 
+
+class PendingActionPage(BaseModel):
+    actions: List[PendingActionListItem]
+    next_page_token: Optional[str] = None
