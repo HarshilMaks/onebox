@@ -3,25 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from typing import Any
 
-import asyncpg
 import pytest
 from sqlalchemy import text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from server.integrations.google import GoogleOperationTimeout
-from server.models import Base, PendingAction
+from server.models import PendingAction
 from server.services import action_handlers, pending_actions
 from server.services.action_handlers import calendar_event_id, gmail_message_id, task_marker
 from server.services.pending_actions import (
     ACTION_SEND_EMAIL,
+    expire_stale_actions,
     PendingActionCommandConflict,
     claim_pending_action,
     create_pending_action,
@@ -31,46 +28,6 @@ from server.services.pending_actions import (
     list_pending_actions,
     reject_pending_action,
 )
-
-
-@pytest.fixture
-async def pending_db(monkeypatch):
-    """Give each test an isolated physical Postgres database and session factory."""
-    configured = make_url(os.environ["DATABASE_URL"])
-    database_name = f"onebox_p6_{uuid.uuid4().hex}"
-    admin_url = configured.set(drivername="postgresql+asyncpg", database="postgres")
-    admin_dsn = admin_url.render_as_string(hide_password=False).replace(
-        "postgresql+asyncpg://", "postgresql://", 1
-    )
-    database_url = configured.set(database=database_name)
-    try:
-        admin = await asyncpg.connect(admin_dsn)
-    except Exception as exc:
-        pytest.skip(f"disposable PostgreSQL database is unavailable: {exc}")
-    try:
-        await admin.execute(f'CREATE DATABASE "{database_name}"')
-    except Exception as exc:
-        await admin.close()
-        pytest.skip(f"disposable PostgreSQL database is unavailable: {exc}")
-
-    engine = create_async_engine(database_url)
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        monkeypatch.setattr(pending_actions, "AsyncSessionLocal", sessions)
-        yield sessions
-    finally:
-        await engine.dispose()
-        admin = await asyncpg.connect(admin_dsn)
-        try:
-            await admin.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
-                database_name,
-            )
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
-        finally:
-            await admin.close()
 
 
 @pytest.fixture
@@ -671,3 +628,116 @@ async def test_another_owners_page_token_cannot_widen_the_owner_filter(pending_d
     page = await list_pending_actions(owner_id, status="pending", limit=20, page_token=foreign_token)
 
     assert {item["id"] for item in page["actions"]} <= {mine["id"]}
+
+
+async def _past_expiry(sessions, action_id) -> None:
+    await _set_columns(sessions, action_id, expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+
+
+@pytest.mark.asyncio
+async def test_sweep_expires_only_stale_pending_actions_and_audits_them(pending_db, owner_id):
+    stale = await _stage_email(owner_id, "sweep-stale")
+    fresh = await _stage_email(owner_id, "sweep-fresh")
+    await _past_expiry(pending_db, stale["id"])
+
+    async with pending_db() as session:
+        assert await expire_stale_actions(session) == 1
+        await session.commit()
+    async with pending_db() as session:
+        assert await expire_stale_actions(session) == 0  # nothing left to sweep
+
+    swept = await get_pending_action(stale["id"], owner_id)
+    assert swept["status"] == "expired" and swept["processed_at"] is not None
+    assert (await get_pending_action(fresh["id"], owner_id))["status"] == "pending"
+    async with pending_db() as session:
+        events = (
+            await session.execute(
+                text("SELECT event_type, old_status, new_status, reason FROM pending_action_audit_events WHERE action_id = :id"),
+                {"id": stale["id"]},
+            )
+        ).all()
+    assert [tuple(event) for event in events] == [("expired", "pending", "expired", "swept_after_expiry")]
+
+
+@pytest.mark.asyncio
+async def test_sweep_never_touches_an_action_that_is_already_processing(pending_db, owner_id):
+    action = await _stage_email(owner_id, "sweep-processing")
+    claimed, did_claim = await claim_pending_action(action["id"], owner_id)
+    assert did_claim and claimed["status"] == "processing"
+    await _past_expiry(pending_db, action["id"])  # old deadline, but the approval already started
+
+    async with pending_db() as session:
+        assert await expire_stale_actions(session) == 0
+        await session.commit()
+
+    assert (await get_pending_action(action["id"], owner_id))["status"] == "processing"
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_a_row_that_an_approval_currently_holds_locked(pending_db, owner_id):
+    action = await _stage_email(owner_id, "sweep-locked")
+    await _past_expiry(pending_db, action["id"])
+
+    async with pending_db() as approver:
+        await approver.execute(
+            text("SELECT id FROM pending_actions WHERE id = :id FOR UPDATE"), {"id": action["id"]}
+        )
+        async with pending_db() as sweeper:
+            assert await expire_stale_actions(sweeper) == 0  # skipped, not blocked or overwritten
+            await sweeper.commit()
+        await approver.rollback()
+
+    async with pending_db() as session:
+        assert await expire_stale_actions(session) == 1  # picked up on the next pass
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_approving_after_the_sweep_reports_expired_and_dispatches_nothing(pending_db, owner_id):
+    action = await _stage_email(owner_id, "sweep-then-approve")
+    await _past_expiry(pending_db, action["id"])
+    async with pending_db() as session:
+        await expire_stale_actions(session)
+        await session.commit()
+
+    current, did_claim = await claim_pending_action(action["id"], owner_id)
+
+    assert did_claim is False and current["status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_sweep_handles_more_stale_rows_than_one_batch(pending_db, owner_id, monkeypatch):
+    monkeypatch.setattr(pending_actions, "_EXPIRY_SWEEP_BATCH", 2)
+    ids = []
+    for index in range(5):
+        action = await _stage_email(owner_id, f"sweep-batch-{index}")
+        await _past_expiry(pending_db, action["id"])
+        ids.append(action["id"])
+
+    async with pending_db() as session:
+        assert await expire_stale_actions(session) == 5
+        await session.commit()
+
+    for action_id in ids:
+        assert (await get_pending_action(action_id, owner_id))["status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_retention_cleanup_reports_and_removes_swept_proposals_after_the_window(pending_db, owner_id):
+    from server.services.retention import cleanup_retained_records
+
+    stale = await _stage_email(owner_id, "sweep-retention")
+    await _past_expiry(pending_db, stale["id"])
+    now = datetime.now(timezone.utc)
+
+    async with pending_db() as session:
+        first = await cleanup_retained_records(session, now=now)
+        await session.commit()
+    assert first.expired_actions == 1 and first.pending_actions == 0  # expired now, kept for the window
+
+    async with pending_db() as session:
+        later = await cleanup_retained_records(session, now=now + timedelta(days=31))
+        await session.commit()
+    assert later.pending_actions == 1  # the normal retention rule now deletes it
+    async with pending_db() as session:
+        assert await session.get(PendingAction, stale["id"]) is None

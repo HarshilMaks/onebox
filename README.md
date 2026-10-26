@@ -459,7 +459,41 @@ Authorization: Bearer <JWT_TOKEN>
 
 - `status` is required and must be one of `pending`, `processing`, `succeeded`, `failed`, `rejected`, `expired`, or `reconciliation_required`. Anything else returns `422`.
 - `limit` is 1-100 (default 20). When more actions exist, `next_page_token` is set; send it back as `page_token` to get the next page. It is `null` on the last page. Paging is keyset-based, so actions created between requests never cause duplicates or gaps. A malformed `page_token` returns `422`.
-- A pending action expires 15 minutes after it is created, but its stored status only changes to `expired` when someone tries to approve it. `is_expired: true` marks a stored `pending` action that is already past its deadline; listing never modifies any row.
+- A pending action expires 15 minutes after it is created. The worker marks never-approved proposals `expired` on its hourly cleanup pass, so for up to an hour a stored `pending` action can already be past its deadline: `is_expired: true` marks those. Listing never modifies any row.
+
+### 8. Inbox Triage Results
+
+Shows the signed-in user what the background worker did with their own incoming mail: one result per analyzed message, newest first. There is no `user_id` or mailbox parameter. The owner is the verified Google account connected to the caller's login, and a user with no connected account gets an empty list.
+
+```http
+GET /mail/triage?state=succeeded&limit=20 HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Response (200 OK, abridged):**
+```json
+{
+  "results": [
+    {
+      "id": "3f0c8f5e-6f1d-4a43-9d5e-0a6f6a6b8c11",
+      "message_id": "18c4e7a2b9d01f3a",
+      "state": "succeeded",
+      "summary_preview": "Sarah asks to move Thursday's roadmap review to 3 PM and wants a reply by tomorrow.",
+      "last_error_code": null,
+      "created_at": "2026-10-16T14:50:12.481516Z",
+      "processed_at": "2026-10-16T14:50:15.120044Z"
+    }
+  ],
+  "next_page_token": null
+}
+```
+
+- `state` is required: `succeeded` (summarized), `noop` (filtered out, for example no-reply or promotional mail, or the message was no longer in the mailbox), `dead_letter` (analysis gave up; `last_error_code` says why and never contains email content), or `processing`. Anything else returns `422`.
+- `limit` is 1-100 (default 20), and `page_token` / `next_page_token` work as for actions. Results are ordered by creation time, newest first.
+- List items carry only `summary_preview` (the first 280 characters). `GET /mail/triage/{triage_id}` returns the full `summary` (up to 4,000 characters) for one result; another user's id returns `404`.
+- Summaries are written by a model from untrusted email content, so a sender can influence them. Clients must render them as plain text, never as HTML or markdown, and never auto-link them.
+- Results are deleted 14 days after processing (`GMAIL_TRIAGE_RETENTION_DAYS`), so this is a recent-activity view, not an archive.
 
 ### Pending Action Lifecycle
 
@@ -520,7 +554,7 @@ External Google API failures are classified into granular categories:
 - **Single Dispatch:** Non-idempotent writes are executed exactly once. Ambiguous results transition to `reconciliation_required`.
 - **Authoritative Identity:** Persisted case-normalized Google email addresses define account ownership. OneBox fails closed if credentials point to a renamed or mismatched account.
 - **Watch Renewal Backoff:** Failed Gmail watch renewals are retried with exponential backoff using a per-mailbox `watch_renewal_next_attempt_at` cursor. Sustained failures surface in `/mail/agent/health` and the operations runbook.
-- **Data Retention:** Terminal pending actions are retained for **30 days**; terminal notification jobs and triage logs are retained for **14 days**. Expired rows are purged periodically by the worker.
+- **Data Retention:** Terminal pending actions are retained for **30 days**; terminal notification jobs and triage logs are retained for **14 days**. Proposals nobody approves are marked `expired` by the worker's hourly cleanup and then removed under the same 30-day rule. Expired rows are purged periodically by the worker.
 
 ---
 
@@ -626,6 +660,7 @@ onebox/
 │   ├── schemas.py               # Public request/response models for the OpenAPI contract
 │   ├── action_payloads.py       # Strict typed payloads for each pending action type
 │   ├── redis_cache.py           # Generational Redis cache client and utilities
+│   ├── pagination.py            # Opaque keyset page tokens shared by list endpoints
 │   ├── request_limits.py        # Request-body size limit middleware
 │   ├── logging_config.py        # Redacting log formatter and correlation IDs
 │   ├── agent_policy.py          # Immutable per-run agent authorization policy
@@ -647,7 +682,8 @@ onebox/
 │   │   ├── agent_oauth.py       # Google OAuth 2.0 authorization-code / state flows
 │   │   ├── agent_router.py      # Executive/streaming agents & pending action lifecycle
 │   │   ├── google_mail.py       # User mail fetch, search, star, and delete endpoints
-│   │   └── push_router.py       # Authenticated Google Pub/Sub push receiver
+│   │   ├── push_router.py       # Authenticated Google Pub/Sub push receiver
+│   │   └── triage.py            # Read-only view of the worker's triage results
 │   ├── services/
 │   │   ├── pending_actions.py   # Pending action staging, claiming, and reconciliation
 │   │   ├── action_handlers.py   # Executable handlers for approved pending actions
@@ -655,7 +691,8 @@ onebox/
 │   │   ├── credentials.py       # OAuth exchange, token storage, refresh, and service building
 │   │   ├── mailbox.py           # User-facing mailbox fetch and cache services
 │   │   ├── readiness.py         # Migration and persistence health verifiers
-│   │   ├── retention.py         # Terminal record pruning routines
+│   │   ├── retention.py         # Expires stale proposals and prunes terminal records
+│   │   ├── triage_results.py    # Owner-scoped triage result queries
 │   │   └── setup_google.py      # Authenticated Google Workspace service factories
 │   └── workers/
 │       ├── __main__.py          # Worker entrypoint (`python -m server.workers`)

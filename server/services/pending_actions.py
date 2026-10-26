@@ -1,8 +1,6 @@
 """Durable, owner-authorized execution of agent-requested side effects."""
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import re
 import secrets
@@ -11,12 +9,13 @@ from email.utils import getaddresses
 from typing import Any, Mapping
 from uuid import UUID
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 
 from server.action_payloads import canonicalize_action_payload
 from server.database import AsyncSessionLocal
 from server.models import PendingAction, PendingActionAuditEvent
+from server.pagination import decode_page_token, encode_page_token
 from server.services.action_handlers import (
     AmbiguousActionOutcome,
     ConfirmedActionFailure,
@@ -40,6 +39,7 @@ SUPPORTED_ACTIONS = {
 }
 PENDING_ACTION_TTL = timedelta(minutes=15)
 PROCESSING_LEASE = timedelta(minutes=2)
+_EXPIRY_SWEEP_BATCH = 500
 _COMMAND_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
@@ -52,10 +52,6 @@ class PendingActionInvalidState(Exception):
 
 
 class PendingActionCommandConflict(Exception):
-    pass
-
-
-class InvalidPageToken(Exception):
     pass
 
 
@@ -337,25 +333,44 @@ async def get_pending_action_for_reconciliation(action_id: UUID) -> dict[str, An
         return action_to_dict(action) | {"user_id": action.user_id}
 
 
-def _encode_page_token(created_at: datetime, action_id: UUID) -> str:
-    """Opaque position marker: "continue after this (created_at, id) row"."""
-    raw = json.dumps({"c": created_at.isoformat(), "i": str(action_id)}, separators=(",", ":"))
-    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+async def expire_stale_actions(db: Any, *, now: datetime | None = None) -> int:
+    """Mark never-approved proposals past `expires_at` as expired, auditing each one.
 
-
-def _decode_page_token(token: str) -> tuple[datetime, UUID]:
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-        if not isinstance(data, dict) or not isinstance(data.get("c"), str) or not isinstance(data.get("i"), str):
-            raise ValueError("unexpected cursor shape")
-        created_at = datetime.fromisoformat(data["c"])
-        action_id = UUID(data["i"])
-    except ValueError:
-        raise InvalidPageToken() from None
-    if created_at.tzinfo is None:
-        raise InvalidPageToken()
-    return created_at, action_id
+    Only `pending` rows are touched, so an action that is already processing (or later)
+    is never swept, and rows an approval currently holds locked are skipped until the
+    next pass. Uses the same `expires_at <= now` boundary as `claim_pending_action`.
+    Runs inside the caller's transaction.
+    """
+    current = now or _now()
+    swept = 0
+    while True:
+        stale = (
+            select(PendingAction.id)
+            .where(PendingAction.status == "pending", PendingAction.expires_at <= current)
+            .order_by(PendingAction.expires_at)
+            .limit(_EXPIRY_SWEEP_BATCH)
+            .with_for_update(skip_locked=True)
+        )
+        result = await db.execute(
+            update(PendingAction)
+            .where(PendingAction.id.in_(stale), PendingAction.status == "pending")
+            .values(status="expired", processed_at=current)
+            .returning(PendingAction.id)
+        )
+        action_ids = result.scalars().all()
+        db.add_all(
+            PendingActionAuditEvent(
+                action_id=action_id,
+                event_type="expired",
+                old_status="pending",
+                new_status="expired",
+                reason="swept_after_expiry",
+            )
+            for action_id in action_ids
+        )
+        swept += len(action_ids)
+        if len(action_ids) < _EXPIRY_SWEEP_BATCH:
+            return swept
 
 
 async def list_pending_actions(
@@ -375,7 +390,7 @@ async def list_pending_actions(
     """
     conditions = [PendingAction.user_id == user_id, PendingAction.status == status]
     if page_token is not None:
-        cursor_created_at, cursor_id = _decode_page_token(page_token)
+        cursor_created_at, cursor_id = decode_page_token(page_token)
         conditions.append(
             tuple_(PendingAction.created_at, PendingAction.id) < tuple_(cursor_created_at, cursor_id)
         )
@@ -413,7 +428,7 @@ async def list_pending_actions(
             for row in page
         ],
         "next_page_token": (
-            _encode_page_token(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+            encode_page_token(page[-1].created_at, page[-1].id) if len(rows) > limit else None
         ),
     }
 

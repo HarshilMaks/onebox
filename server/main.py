@@ -15,7 +15,7 @@ from server.integrations.llm import close_llm_adapter
 from server.integrations.redis import close_redis_adapter
 from server.logging_config import bind_correlation_id, reset_correlation_id, setup_logging
 from server.request_limits import RequestBodyLimitMiddleware
-from server.routes import agent_oauth, agent_router, google_mail, push_router
+from server.routes import agent_oauth, agent_router, google_mail, push_router, triage
 from server.schemas import PublicErrorResponse, ReadinessResponse
 from server.services.readiness import readiness_status
 from server.workers.mail_notifications import run_notification_worker
@@ -175,5 +175,6 @@ async def root():
 
 app.include_router(google_mail.router)
 app.include_router(push_router.router)
+app.include_router(triage.router)
 app.include_router(agent_router.router)
 app.include_router(agent_oauth.router)
