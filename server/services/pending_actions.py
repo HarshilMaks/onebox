@@ -9,7 +9,7 @@ from email.utils import getaddresses
 from typing import Any, Mapping
 from uuid import UUID
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 
 from server.action_payloads import canonicalize_action_payload
@@ -39,6 +39,7 @@ SUPPORTED_ACTIONS = {
 }
 PENDING_ACTION_TTL = timedelta(minutes=15)
 PROCESSING_LEASE = timedelta(minutes=2)
+_EXPIRY_SWEEP_BATCH = 500
 _COMMAND_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
@@ -330,6 +331,46 @@ async def get_pending_action_for_reconciliation(action_id: UUID) -> dict[str, An
         if not action:
             raise PendingActionNotFound()
         return action_to_dict(action) | {"user_id": action.user_id}
+
+
+async def expire_stale_actions(db: Any, *, now: datetime | None = None) -> int:
+    """Mark never-approved proposals past `expires_at` as expired, auditing each one.
+
+    Only `pending` rows are touched, so an action that is already processing (or later)
+    is never swept, and rows an approval currently holds locked are skipped until the
+    next pass. Uses the same `expires_at <= now` boundary as `claim_pending_action`.
+    Runs inside the caller's transaction.
+    """
+    current = now or _now()
+    swept = 0
+    while True:
+        stale = (
+            select(PendingAction.id)
+            .where(PendingAction.status == "pending", PendingAction.expires_at <= current)
+            .order_by(PendingAction.expires_at)
+            .limit(_EXPIRY_SWEEP_BATCH)
+            .with_for_update(skip_locked=True)
+        )
+        result = await db.execute(
+            update(PendingAction)
+            .where(PendingAction.id.in_(stale), PendingAction.status == "pending")
+            .values(status="expired", processed_at=current)
+            .returning(PendingAction.id)
+        )
+        action_ids = result.scalars().all()
+        db.add_all(
+            PendingActionAuditEvent(
+                action_id=action_id,
+                event_type="expired",
+                old_status="pending",
+                new_status="expired",
+                reason="swept_after_expiry",
+            )
+            for action_id in action_ids
+        )
+        swept += len(action_ids)
+        if len(action_ids) < _EXPIRY_SWEEP_BATCH:
+            return swept
 
 
 async def list_pending_actions(

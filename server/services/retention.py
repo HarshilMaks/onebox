@@ -11,6 +11,7 @@ from sqlalchemy import delete
 from server.config import settings
 from server.database import AsyncSessionLocal
 from server.models import GmailNotificationJob, GmailTriageWork, PendingAction
+from server.services.pending_actions import expire_stale_actions
 
 
 _RESOLVED_ACTION_STATUSES = ("succeeded", "failed", "rejected", "expired")
@@ -23,6 +24,7 @@ class RetentionCleanupResult:
     pending_actions: int
     notification_jobs: int
     triage_work: int
+    expired_actions: int = 0
 
 
 def _now() -> datetime:
@@ -30,13 +32,17 @@ def _now() -> datetime:
 
 
 async def cleanup_retained_records(db: Any, *, now: datetime | None = None) -> RetentionCleanupResult:
-    """Delete only terminal records older than configured retention cutoffs.
+    """Expire stale proposals, then delete only terminal records older than the retention cutoffs.
+
+    Proposals nobody approved are first marked expired, so the normal retention window
+    removes them like any other resolved action.
 
     Reconciliation-required actions intentionally remain untouched: they retain
     their payload/evidence until an authorized operator resolves the outcome.
     Pending-action audit rows cascade with their parent action.
     """
     current = now or _now()
+    expired_actions = await expire_stale_actions(db, now=current)
     actions_cutoff = current - timedelta(days=settings.PENDING_ACTION_RETENTION_DAYS)
     jobs_cutoff = current - timedelta(days=settings.GMAIL_JOB_RETENTION_DAYS)
     triage_cutoff = current - timedelta(days=settings.GMAIL_TRIAGE_RETENTION_DAYS)
@@ -66,6 +72,7 @@ async def cleanup_retained_records(db: Any, *, now: datetime | None = None) -> R
         pending_actions=actions.rowcount or 0,
         notification_jobs=jobs.rowcount or 0,
         triage_work=triage.rowcount or 0,
+        expired_actions=expired_actions,
     )
 
 
