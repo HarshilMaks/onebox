@@ -21,6 +21,7 @@ from server.schemas import (
     PendingActionStatus,
 )
 from server.integrations.google import GoogleProviderError
+from server.pagination import InvalidPageToken
 from server.integrations.llm import (
     LlmOperationInternal,
     LlmOperationTimeout,
@@ -29,7 +30,6 @@ from server.integrations.llm import (
 from server.agent_policy import INTERACTIVE_EXECUTIVE_POLICY, INTERACTIVE_STREAM_POLICY
 from server.config import settings
 from server.services.pending_actions import (
-    InvalidPageToken,
     PendingActionInvalidState,
     PendingActionNotFound,
     claim_pending_action,
