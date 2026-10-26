@@ -108,3 +108,44 @@ def test_checked_in_star_client_contract_matches_the_required_state_request():
     assert "export interface StarStateUpdate" in client_contract
     assert "starred: boolean;" in client_contract
     assert "toggleStar: StarStateUpdate;" in client_contract
+
+
+def _ts_union_values(client_contract: str, type_name: str) -> set[str]:
+    block = client_contract.split(f"export type {type_name} =", 1)[1].split(";", 1)[0]
+    return {part.strip().strip('"') for part in block.split("|") if part.strip()}
+
+
+def test_client_status_unions_list_every_value_the_backend_can_return():
+    components = app.openapi()["components"]["schemas"]
+    client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
+
+    assert _ts_union_values(client_contract, "PendingActionStatus") == set(components["PendingActionStatus"]["enum"])
+    assert _ts_union_values(client_contract, "TriageState") == set(components["TriageState"]["enum"])
+    # The detail type reuses the full union instead of an inline copy that can drift.
+    assert "status: PendingActionStatus;" in client_contract
+
+
+def test_checked_in_triage_contract_matches_the_backend():
+    schema = app.openapi()
+    operation = schema["paths"]["/mail/triage"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    # No user_id or mailbox parameter exists: the owner is the verified Google account.
+    assert set(parameters) == {"state", "limit", "page_token"}
+    assert parameters["state"]["required"] is True
+    assert parameters["limit"]["schema"]["maximum"] == 100
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("TriagePage")
+    detail = schema["paths"]["/mail/triage/{triage_id}"]["get"]
+    assert detail["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("TriageDetail")
+
+    components = schema["components"]["schemas"]
+    assert "summary_preview" in components["TriageListItem"]["properties"]
+    assert "summary" not in components["TriageListItem"]["properties"]
+    assert "summary" in components["TriageDetail"]["properties"]
+
+    client_contract = (REPOSITORY_ROOT / "frontend-client-types.ts").read_text(encoding="utf-8")
+    assert "export interface TriageListItem" in client_contract
+    assert "export interface TriageDetail" in client_contract
+    assert "listTriageResults: TriagePage;" in client_contract
+    assert "getTriageResult: TriageDetail;" in client_contract
+    assert 'path: "/mail/triage/{triage_id}"' in client_contract
