@@ -197,6 +197,48 @@ export interface PendingActionListQuery {
   page_token?: string | null;
 }
 
+/** Outcome of the background worker's analysis of one inbound message. */
+export type TriageState = "processing" | "succeeded" | "noop" | "dead_letter";
+
+interface TriageResultBase {
+  id: string;
+  message_id: string;
+  state: TriageState;
+  /** Safe machine code for a `dead_letter` result; never email content. */
+  last_error_code?: string | null;
+  created_at: string;
+  /** Empty while the message is still `processing`. */
+  processed_at?: string | null;
+}
+
+/**
+ * Summaries are written by a model from untrusted email content, so a sender can influence
+ * them. Render them as plain text only: never as HTML or markdown, and never auto-link them.
+ */
+export interface TriageListItem extends TriageResultBase {
+  summary_preview?: string | null;
+}
+
+/** Same untrusted-text rule as `TriageListItem`. Results are kept only for the retention window. */
+export interface TriageDetail extends TriageResultBase {
+  summary?: string | null;
+}
+
+export interface TriagePage {
+  results: TriageListItem[];
+  next_page_token?: string | null;
+}
+
+export interface TriageListQuery {
+  state: TriageState; // required
+  limit?: number; // default 20, 1-100
+  page_token?: string | null;
+}
+
+export interface TriagePathParams {
+  triage_id: string;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth / agent connection schemas
 // ---------------------------------------------------------------------------
@@ -265,6 +307,8 @@ export const ONEBOX_API_ENDPOINTS = {
   rejectPendingAction: { method: "POST", path: "/actions/{action_id}/reject", auth: "jwt" } as const,
 
   // -- Per-user Gmail --
+  listTriageResults: { method: "GET", path: "/mail/triage", auth: "jwt" } as const,
+  getTriageResult: { method: "GET", path: "/mail/triage/{triage_id}", auth: "jwt" } as const,
   listEmails: { method: "GET", path: "/mail/emails", auth: "jwt" } as const,
   getEmail: { method: "GET", path: "/mail/emails/{email_id}", auth: "jwt" } as const,
   markEmailRead: { method: "POST", path: "/mail/emails/{email_id}/read", auth: "jwt" } as const,
@@ -304,6 +348,8 @@ export interface OneboxApiResponse {
   getPendingAction: PendingActionResponse;
   approvePendingAction: PendingActionResponse;
   rejectPendingAction: PendingActionResponse;
+  listTriageResults: TriagePage;
+  getTriageResult: TriageDetail;
   listEmails: EmailPage;
   getEmail: EmailDetail;
   markEmailRead: MailMutationResponse;
