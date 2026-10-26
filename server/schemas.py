@@ -38,6 +38,15 @@ class PendingActionStatus(str, Enum):
     RECONCILIATION_REQUIRED = "reconciliation_required"
 
 
+class TriageState(str, Enum):
+    """Outcome of the background worker's analysis of one inbound message."""
+
+    PROCESSING = "processing"
+    SUCCEEDED = "succeeded"
+    NOOP = "noop"
+    DEAD_LETTER = "dead_letter"
+
+
 class MailMutationStatus(str, Enum):
     MARKED_READ = "marked as read"
     MARKED_UNREAD = "marked as unread"
@@ -263,4 +272,34 @@ class PendingActionListItem(BaseModel):
 
 class PendingActionPage(BaseModel):
     actions: List[PendingActionListItem]
+    next_page_token: Optional[str] = None
+
+
+_UNTRUSTED_SUMMARY = (
+    "Written by a model from untrusted email content, so a sender can influence it. "
+    "Render as plain text only: never as HTML or markdown, and never auto-link it."
+)
+
+
+class TriageResultBase(BaseModel):
+    id: UUID
+    message_id: str
+    state: TriageState
+    last_error_code: Optional[str] = None
+    created_at: datetime
+    processed_at: Optional[datetime] = None
+
+
+class TriageListItem(TriageResultBase):
+    """One analyzed message; only a short preview of the summary, never the full text."""
+
+    summary_preview: Optional[str] = Field(default=None, description=_UNTRUSTED_SUMMARY)
+
+
+class TriageDetail(TriageResultBase):
+    summary: Optional[str] = Field(default=None, description=_UNTRUSTED_SUMMARY)
+
+
+class TriagePage(BaseModel):
+    results: List[TriageListItem]
     next_page_token: Optional[str] = None
