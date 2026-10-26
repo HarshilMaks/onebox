@@ -151,7 +151,7 @@ export interface PendingActionResponse {
   payload: Record<string, unknown>;
   payload_hash: string;
   summary: string;
-  status: "pending" | "processing" | "succeeded" | "failed" | "rejected" | "expired";
+  status: PendingActionStatus;
   result: Record<string, unknown> | null;
   error_code: string | null;
   created_at: string;
