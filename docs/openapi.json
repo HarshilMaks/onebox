@@ -856,6 +856,173 @@
         "title": "StarStateUpdate",
         "type": "object"
       },
+      "TriageDetail": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "processed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TriageState"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Written by a model from untrusted email content, so a sender can influence it. Render as plain text only: never as HTML or markdown, and never auto-link it.",
+            "title": "Summary"
+          }
+        },
+        "required": [
+          "id",
+          "message_id",
+          "state",
+          "created_at"
+        ],
+        "title": "TriageDetail",
+        "type": "object"
+      },
+      "TriageListItem": {
+        "description": "One analyzed message; only a short preview of the summary, never the full text.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "processed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TriageState"
+          },
+          "summary_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Written by a model from untrusted email content, so a sender can influence it. Render as plain text only: never as HTML or markdown, and never auto-link it.",
+            "title": "Summary Preview"
+          }
+        },
+        "required": [
+          "id",
+          "message_id",
+          "state",
+          "created_at"
+        ],
+        "title": "TriageListItem",
+        "type": "object"
+      },
+      "TriagePage": {
+        "properties": {
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/TriageListItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "TriagePage",
+        "type": "object"
+      },
+      "TriageState": {
+        "description": "Outcome of the background worker's analysis of one inbound message.",
+        "enum": [
+          "processing",
+          "succeeded",
+          "noop",
+          "dead_letter"
+        ],
+        "title": "TriageState",
+        "type": "string"
+      },
       "VerifyAndCreateEntryResponse": {
         "properties": {
           "email": {
@@ -2425,6 +2592,138 @@
         "summary": "Send Email Api",
         "tags": [
           "Email-Operations"
+        ]
+      }
+    },
+    "/mail/triage": {
+      "get": {
+        "description": "List what the background worker did with your incoming mail, newest first, as short previews.\n\nOnly the caller's own connected mailbox is ever returned. Summaries are written by a model\nfrom untrusted email content, so a sender can influence them: render them as plain text only.\nResults are kept for the configured retention period (14 days by default), so this is a\nrecent-activity view, not an archive.",
+        "operationId": "list_triage_endpoint_mail_triage_get",
+        "parameters": [
+          {
+            "description": "Analysis outcome to list; required.",
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TriageState",
+              "description": "Analysis outcome to list; required."
+            }
+          },
+          {
+            "description": "Max number of results per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Max number of results per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pagination token",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pagination token",
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriagePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Triage Endpoint",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/mail/triage/{triage_id}": {
+      "get": {
+        "description": "Return one of your results with the full summary (still untrusted: render as plain text).",
+        "operationId": "get_triage_endpoint_mail_triage__triage_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "triage_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Triage Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriageDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed; the error and detail fields are safe for clients to display."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Triage Endpoint",
+        "tags": [
+          "mail"
         ]
       }
     },
