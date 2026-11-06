@@ -7,7 +7,7 @@ Counts below come from reading `tests/`, not from a test run. Test-function coun
 | Layer | Location | Approx. size | Needs |
 | --- | --- | --- | --- |
 | Unit | `tests/unit/` (21 files) | about 145 test functions | nothing external; hand-written fakes |
-| Integration | `tests/integration/` (4 files plus `conftest.py`) | about 50 test functions, about 41 of them use PostgreSQL | a real PostgreSQL server |
+| Integration | `tests/integration/` (4 files plus `conftest.py`) | about 50 test functions; 44 collected tests need PostgreSQL (without one a run shows 202 passed and 44 skipped) | a real PostgreSQL server |
 | End to end or live provider | not present | 0 | n/a |
 
 `tests/unit/test_api_contract.py` is a contract layer inside the unit tests: it compares `docs/openapi.json` and `frontend-client-types.ts` with the live app.
@@ -29,19 +29,19 @@ Known weakness: the Gmail fakes are copied across four files and there is no sha
 
 ## 3. TDD workflow
 
-1. RED: write one test for the behavior. Run it and confirm it fails for the intended reason (an assertion about the behavior, not an import or fixture error). Commit as `test: ...`.
-2. GREEN: write the smallest change that passes. Commit as `feat:` or `fix:`.
-3. Refactor with the suite green, in its own `refactor:` commit.
+1. RED: write one test for the behavior. Run it and confirm it fails for the intended reason (an assertion about the behavior, not an import or fixture error). Keep it local: never commit a failing test to `main`.
+2. GREEN: write the smallest change that passes. Commit the test and the fix together as one logical commit (`feat:` or `fix:`).
+3. Refactor with the suite green. A meaningful restructuring is its own `refactor:` commit; otherwise fold it into step 2. Commit sizing: `AGENT_GUIDE.md` §6.
 4. Docs and contract regeneration (`make contract`) in a `docs:` or `feat:` commit.
-5. Run `make check` before pushing.
+5. Run `make check` before every commit.
 
-Recent history usually lands the test commit after the feature commit (for example the triage work). Going forward, RED comes first. Coverage must be measured, never estimated: no coverage tool is present (`pytest-cov` is not in `requirements-dev.in`), so add one through the dependency process before quoting percentages.
+Recent history usually lands the test commit after the feature commit (for example the triage work). Going forward, RED comes first locally, and test and fix are committed together. Coverage must be measured, never estimated: no coverage tool is present (`pytest-cov` is not in `requirements-dev.in`), so add one through the dependency process before quoting percentages.
 
 ## 4. System invariants
 
 | # | Invariant | Status | Enforced by or notes |
 | --- | --- | --- | --- |
-| 1 | No external write without an approved stored action | BUILT (agent path, partial) | `test_automated_policy_exposes_zero_tools_even_with_all_services`, `test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mutation`, `test_owner_scope_and_concurrent_approvals_dispatch_once`. Gap: `execute_action` does not itself refuse an unclaimed action, and human `/mail/send` is a documented exception. |
+| 1 | No external write without an approved stored action | BUILT (agent path, partial) | `test_automated_policy_exposes_zero_tools_even_with_all_services`, `test_stream_policy_rejects_unallowed_calls_and_only_executes_first_mutation`, `test_owner_scope_and_concurrent_approvals_dispatch_once`. Gaps: `execute_action` does not itself refuse an unclaimed action; the REST mail writes bypass the ledger until ROADMAP step 0.6; the assistant's `create_draft` and `mark_as_read` are the two accepted exceptions (THREAT_MODEL §4 rule 10). |
 | 2 | An expired proposal can never be claimed | BUILT | `test_expiry_tampering_and_stale_finalizer_require_reconciliation`, `test_approving_after_the_sweep_reports_expired_and_dispatches_nothing` |
 | 3 | Same `command_key` and payload returns the existing action; a different payload conflicts | BUILT | `test_command_key_idempotency_allows_later_identical_actions` |
 | 4 | Ambiguous provider outcome is never auto-retried and ends in `reconciliation_required` | BUILT | `test_ambiguous_timeout_is_not_failed_or_retried`, `test_ambiguous_write_timeout_never_retries`, `test_task_list_write_without_acknowledgement_is_ambiguous` |
@@ -55,7 +55,13 @@ Recent history usually lands the test commit after the feature commit (for examp
 | 12 | Prompt-breakout markers in email cannot alter prompt structure | PLANNED | none |
 | 13 | Disconnecting an app revokes at the provider and deletes stored tokens | PLANNED | No disconnect or revoke code is present in `server/` yet |
 | 14 | A stuck `processing` action with an expired lease moves to `reconciliation_required` automatically, audited | PLANNED | Lease expiry is handled only when someone touches the row (claim, finalize, operator reconcile; the last is covered by `test_gmail_reconciliation_transitions_are_conservative`). No background sweep exists |
-| 15 | A failing retention cleanup does not stop the notification worker loop | PLANNED | `test_worker_survives_claim_failure_and_retries_iteration` stubs cleanup. From reading `run_notification_worker`, cleanup runs before heartbeat and claim inside the same `try`, so a persistent failure would skip both each iteration. Assert they still run; expect RED |
+| 15 | A failing retention cleanup does not starve the heartbeat, watch renewal or job claim | PLANNED | `test_worker_survives_claim_failure_and_retries_iteration` stubs cleanup. From reading `run_notification_worker` (about lines 429–433 of `server/workers/mail_notifications.py`), cleanup runs before the heartbeat, watch renewal and job claim inside the same `try`, so a persistent failure skips all three each iteration while the loop itself survives. Assert they still run; expect RED |
+| 16 | The OAuth callback is bound to the browser session that started it (session hash and PKCE verifier stored with the state) | PLANNED | Today the callback is unauthenticated and the state binds only the user id and expected email |
+| 17 | Approval is bound to the payload hash the user saw and to the connection and permission at claim time; editing atomically supersedes the old proposal | PLANNED | none |
+| 18 | Reconcile never declares `failed` inside the quiet period after dispatch | PLANNED | `test_gmail_reconciliation_transitions_are_conservative` covers the other transitions |
+| 19 | Event attendees and reply recipients are limited to the verified sender; bidi and control characters are rejected | PLANNED | none |
+| 20 | A confirmed provider result is accepted when the attempt token still matches, even after the lease expired | PLANNED | none |
+| 21 | Disconnecting or deleting removes the connection's summaries, jobs and cached data | PLANNED | none; the triage and job tables carry no user or connection id today |
 
 ## 5. Planned test types for new work
 

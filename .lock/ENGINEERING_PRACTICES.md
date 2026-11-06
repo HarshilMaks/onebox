@@ -14,16 +14,16 @@ make run-worker                             # automation worker; needs the autom
 make check                                  # ruff, OpenAPI drift check, pytest
 ```
 
-Required variable names (set in `.env`, never committed): `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL`, `CORS_ALLOWED_ORIGINS`. Add `OAUTH_TOKEN_KEYRING_PATH` plus `OAUTH_TOKEN_ACTIVE_KEY_ID` (a pair; credential work fails closed without both). The worker also needs `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL`. Compose adds `POSTGRES_PASSWORD` and the `*_HOST_PATH` mount variables. The test suite imports settings, so these must be exported even for `pytest`.
+Required variable names (set in `.env`, never committed): `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL`, `CORS_ALLOWED_ORIGINS`. Add `OAUTH_TOKEN_KEYRING_PATH` plus `OAUTH_TOKEN_ACTIVE_KEY_ID` (a pair; credential work fails closed without both). `PENDING_ACTION_OPERATOR_IDS` is needed for the operator-only reconcile endpoint. `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `ALGORITHM` and `CORS_ALLOWED_ORIGINS` have defaults in `server/config.py`. The worker also needs `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL`. Compose adds `POSTGRES_PASSWORD` and the `*_HOST_PATH` mount variables. The test suite imports settings, so these must be exported even for `pytest`.
 
 ## 2. CI pipeline
 
-`.github/workflows/backend.yml`, "Backend checks". It runs on every pull request and on pushes to `main` and `backend/**`, with `contents: read` permission only.
+`.github/workflows/backend.yml`, "Backend checks". It runs on every pull request and on pushes to `main` and `backend/**`, with `contents: read` permission only. Feature branches (`feat/**`, `fix/**` and so on) get no CI until a pull request exists; TASKS 0.10 adds branch triggers.
 
 | Job | What it checks |
 | --- | --- |
 | `quality` | Installs `requirements-dev.txt` with `--require-hashes`; `pip-compile --dry-run` on both `.in` files (inputs resolve; it does not diff the committed locks); `ruff check .`; `python scripts/generate_openapi.py --check`; `compileall`; `alembic upgrade head` then `alembic check` (model drift) against a PostgreSQL 16.6 service; `pytest -q`; `alembic heads` and `alembic history --verbose`; `docker compose config -q`. |
-| `image` | `docker build --no-cache`, then asserts the container is non-root and holds no `.env`, `.git`, `tests`, or `*.json` file. Same as `make image-smoke`. |
+| `image` | `docker build --no-cache`, then asserts the container is non-root and holds no `.env`, `.git`, `.agents`, `tests`, or `*.json` file. Same as `make image-smoke`. |
 | `secrets` | `gitleaks/gitleaks-action@v2` over full git history. |
 
 Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependency vulnerability scanning, Dependabot or Renovate, a PR template, CODEOWNERS. CI starts no Redis; tests use in-memory fakes.
@@ -36,8 +36,8 @@ Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependenc
   - **Branch names are plain and descriptive:** `feat/<slug>`, `fix/<slug>`, `refactor/<slug>`, `docs/<slug>` or `chore/<slug>`. Never a `claude/` prefix.
   - A major branch is reviewed by the owner and then merged into `main` (as a pull request on GitHub when the owner wants one). The definition of done below must pass locally before every commit and before every merge.
   - Pushing to the remote happens only when the owner asks. History before this date shows `backend/...`, `docs/...` and `claude/...` branches and "Merge pull request" commits.
-- Commits use lowercase Conventional Commits without scopes. The types actually used are `feat`, `fix`, `test`, `docs` and `refactor`. Subjects are imperative; bodies explain why. One early commit does not follow the style; do not copy it.
-- Keep commits small and one-purpose, for example schema, then service, then route, then client types, then docs.
+- Commits use lowercase Conventional Commits without scopes: `feat`, `fix`, `test`, `docs`, `refactor` and `chore`. Subjects are imperative; bodies explain why. Older history is not a style guide: about half of the earlier non-merge subjects (65 of 133) are not conventional.
+- **One commit is one logical step that builds and passes the suite on its own.** Tests travel with the code they test, and no failing test is committed to `main`. A feature is typically three to six commits, in this order when relevant: schema or migration, core logic, wiring, API contract and client types, docs. Not one lump, and no noise commits for typos or forgotten imports (fold those in before committing). Worked example: [AGENT_GUIDE.md](AGENT_GUIDE.md) §6.
 
 ## 4. Definition of done
 
@@ -48,6 +48,7 @@ Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependenc
 5. New or changed settings are in `.env.example`, `docs/OPERATIONS.md`, and CI or Compose if required.
 6. `README.md` and `docs/OPERATIONS.md` describe the new behavior.
 7. No secrets, tokens, mail content, or personal data in code, tests, fixtures, or commit messages.
+8. A change that alters behavior also updates the `.lock/` docs it affects: status tags, test counts, the HANDOFF baseline, and the task's status in `TASKS.md`.
 
 ## 5. Database migrations
 
@@ -59,7 +60,7 @@ Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependenc
 
 ## 6. Configuration and secrets
 
-- Settings are typed in `server/config.py`; unknown names fail startup (`extra="forbid"`). The checked-in `SECRET_KEY` placeholder and keys under 32 bytes are rejected. `combined` role is refused in production, and production needs TLS for PostgreSQL and `rediss://`.
+- Settings are typed in `server/config.py`; unknown names fail startup (`extra="forbid"`). The checked-in `SECRET_KEY` placeholder and keys under 32 bytes are rejected. `combined` role is refused outside development and test, and production needs TLS for PostgreSQL and `rediss://`.
 - `.gitignore` excludes `.env`, `.env.*` (except `.env.example`) and every `*.json`, so `docs/openapi.json` needed force-adding; use `git add -f` only for intended JSON.
 - Credential files, OAuth client files, service-account files and the token keyring are mounted read-only at runtime and never copied into the image (`.dockerignore` is default-deny).
 - Examples and tests use `REPLACE_WITH_...` placeholders, `example.invalid` hosts, and reserved example domains.
@@ -78,7 +79,7 @@ Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependenc
 
 ## 9. Security review checklist
 
-Required in the PR description for any change touching auth, tokens, or external writes:
+Required in the commit body (or the pull request description, when one is used) for any change touching auth, tokens, or external writes:
 
 - [ ] Owner comes from the verified JWT principal, never a request parameter, and cross-owner access returns 404.
 - [ ] JWT checks (algorithm, issuer, audience, `exp`) are unchanged or tested.
@@ -92,4 +93,4 @@ Required in the PR description for any change touching auth, tokens, or external
 
 ## 10. Every external write goes through the ledger
 
-An agent-initiated send, reply, calendar event or task is stored as an immutable pending action (`server/services/pending_actions.py`), claimed under a row lock with a lease and attempt token, committed before dispatch, and audited. The documented exceptions are human API calls (`/mail/send`, deletion, mailbox mutations) and the interactive-only `create_draft` and `mark_as_read` tools (`docs/OPERATIONS.md`, `README.md`). A new exception needs a written reason in `docs/OPERATIONS.md` and security review. Connectors and providers planned in the roadmap must follow the same rule.
+An agent-initiated send, reply, calendar event or task is stored as an immutable pending action (`server/services/pending_actions.py`), claimed under a row lock with a lease and attempt token, committed before dispatch, and audited. The current exceptions are the human REST mail endpoints (send, drafts, read, unread, star, trash, restore, delete), which ROADMAP step 0.6 removes or routes, and the interactive-only `create_draft` and `mark_as_read` tools (`docs/OPERATIONS.md`, `README.md`). A new exception needs a written reason in `docs/OPERATIONS.md` and security review. Connectors and providers planned in the roadmap must follow the same rule.
