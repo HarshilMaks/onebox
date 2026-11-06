@@ -16,13 +16,31 @@ flowchart LR
 ```
 
 **Totals:** Google loop (phases 0–4 and 6): about 23–37 days, roughly 5–7 weeks. With Outlook (phase 5): about 38–62 days, roughly 8–12 weeks.
-**Working method:** every step is test-first (see [TEST_STRATEGY.md](TEST_STRATEGY.md)), one commit per step directly on `main` (owner decision, 2026-11-06; no branches or pull requests, so the definition of done must pass locally before each commit), conventional commits, never push without the owner's approval. Each step's exit criteria must be shown by a command or a test, not by assertion.
+**Working method:** every step is test-first (see [TEST_STRATEGY.md](TEST_STRATEGY.md)), one commit per step, conventional commits, never push without the owner's approval. Where a step lands follows [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) §3 (owner decision, 2026-11-06): **minor steps are committed directly on `main`; major steps get a branch with a plain name (never `claude/`) and are reviewed before merging.** The default for each step is in the table below. Each step's exit criteria must be shown by a command or a test, not by assertion.
+
+### Where each step lands (default; when unsure, use a branch)
+
+| Step or phase | Lands on | Branch name |
+|---|---|---|
+| 0.1 | `main` | — |
+| 0.2, 0.3 (small bug fixes with tests) | `main` | — |
+| 0.4 (ledger state change) | branch | `fix/stuck-action-sweep` |
+| 0.5 (API error contract and client types) | branch | `refactor/error-envelope` |
+| 0.6 (removes endpoints and a scope) | branch | `fix/remove-ledger-bypasses` |
+| 0.7 | `main` for README fixes and dead-code removal; branch if the NULL handling needs a migration | `fix/json-null-handling` |
+| Phase 1 | branch | `feat/identity` |
+| Phase 2 | branch | `feat/connector-contract` |
+| Phase 3 | branch | `feat/email-to-proposals` |
+| Phase 4 | branch | `feat/web-client` |
+| Phase 5 | branch | `feat/outlook-connector` |
+| Phase 6 | branch | `feat/demo-and-packaging` |
+| Optional MCP connector | branch | `feat/mcp-connector` |
 
 ## Phase 0 — Foundations and audit fixes (1–2 days) · milestone M0
 
 | Step | Task | Test first | Exit criteria |
 |---|---|---|---|
-| 0.1 | Sync local `main` to `origin/main`; branch per step | — | `git status` clean; baseline suite green |
+| 0.1 | Confirm local `main` is in sync with `origin/main` and the tree is clean | — | `git status` clean; baseline suite green |
 | 0.2 | Isolate retention-cleanup failure so the worker loop continues (a failing cleanup currently also skips the heartbeat and the job claim) | Cleanup raises → loop keeps processing jobs and keeps its heartbeat | Test red then green |
 | 0.3 | Cap triage retries using the existing `attempt_count` | Poison message stops after N attempts → `dead_letter` | Test red then green |
 | 0.4 | Automatic sweep: expired-lease `processing` → `reconciliation_required` with an audit event | Crash-point test: row stuck past lease is promoted | Test red then green; alert metric defined |

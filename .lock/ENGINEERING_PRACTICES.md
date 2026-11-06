@@ -30,7 +30,12 @@ Not present: coverage, type checking, `ruff format`, pre-commit hooks, dependenc
 
 ## 3. Branching, PRs, commits
 
-- **Commit directly to `main`** (owner decision, 2026-11-06): no topic branches and no pull requests. With no review gate, the definition of done below must pass locally before every commit. Pushing to the remote still happens only when the owner asks. History before this date shows `backend/...`, `docs/...` and `claude/...` branches and "Merge pull request" commits.
+- **Where a change lands** (owner decision, 2026-11-06): **minor changes are committed directly to `main`; major changes go on a new branch for review, so `main` always keeps working.**
+  - **Minor (commit on `main`):** a single-purpose change with no schema migration, no change to the public API contract, auth, sessions, tokens, the ledger or approval semantics, and no new dependency. Examples: docs, tests, config, typos, and small bug fixes that come with a test.
+  - **Major (new branch):** a new feature or roadmap step that adds behavior across several files; any migration; any change to auth, sessions, tokens, the ledger, approvals or connectors; removing an endpoint or scope; a new dependency; a cross-module refactor; or anything the owner should see before it lands. **When unsure, use a branch.**
+  - **Branch names are plain and descriptive:** `feat/<slug>`, `fix/<slug>`, `refactor/<slug>`, `docs/<slug>` or `chore/<slug>`. Never a `claude/` prefix.
+  - A major branch is reviewed by the owner and then merged into `main` (as a pull request on GitHub when the owner wants one). The definition of done below must pass locally before every commit and before every merge.
+  - Pushing to the remote happens only when the owner asks. History before this date shows `backend/...`, `docs/...` and `claude/...` branches and "Merge pull request" commits.
 - Commits use lowercase Conventional Commits without scopes. The types actually used are `feat`, `fix`, `test`, `docs` and `refactor`. Subjects are imperative; bodies explain why. One early commit does not follow the style; do not copy it.
 - Keep commits small and one-purpose, for example schema, then service, then route, then client types, then docs.
 

@@ -17,7 +17,10 @@ Resume the OneBox project (Python 3.12, FastAPI async, PostgreSQL via SQLAlchemy
 Redis, Gemini on Vertex AI, Google OAuth and Pub/Sub). Read .lock/README.md, then .lock/PRD.md,
 .lock/ARCHITECTURE.md, .lock/ROADMAP.md and the ADRs in .lock/DECISIONS/ before changing anything.
 
-Task: execute ROADMAP Phase 0, one commit per step directly on main (no branches, no pull requests), starting at step 0.1.
+Task: execute ROADMAP Phase 0 starting at step 0.1, one commit per step. Minor steps commit directly
+on main; major steps go on a new branch with a plain name (feat/, fix/, refactor/, docs/ or chore/
+prefix, never claude/), as set out in .lock/ENGINEERING_PRACTICES.md section 3 and the "Where each
+step lands" table in .lock/ROADMAP.md.
 Workflow per step: state the step and its exit criteria in one line; write the failing test first
 and run it to confirm it fails for the intended reason (RED); implement the smallest fix to GREEN;
 refactor with tests green; run lint, the OpenAPI drift check, migrations check and the full suite;
@@ -25,8 +28,8 @@ review the diff (and security-review anything touching auth, tokens or external 
 with a conventional message.
 
 Constraints: the AI only proposes and a human approves (ADR-0001); every external write goes
-through the ledger; no secrets or personal data in code, docs or logs; commit directly to main but
-do not push without explicit approval; do not add anything outside the roadmap (freeze rule); keep
+through the ledger; no secrets or personal data in code, docs or logs; minor changes on main and major
+changes on a plainly named branch (never claude/); do not push without explicit approval; do not add anything outside the roadmap (freeze rule); keep
 changes behavior-neutral unless the step says otherwise.
 
 Acceptance: each step's exit criteria shown by a passing test or command output; suite green;
@@ -39,12 +42,13 @@ implementation.
 
 ```
 Read .lock/ROADMAP.md. Do Phase 0 step by step: failing test first, minimal fix, refactor,
-lint + OpenAPI check + full suite, conventional commit. No push without approval.
+lint + OpenAPI check + full suite, conventional commit. Minor on main, major on a plain branch
+(never claude/). No push without approval.
 ```
 
 ## 4. Environment traps
 
-- Work happens directly on `main`; confirm it is up to date with `origin/main` before starting, and that the working tree is clean.
+- Minor work happens on `main`, major work on a branch (see ENGINEERING_PRACTICES section 3). Before starting, confirm `main` is up to date with `origin/main` and the working tree is clean. Prefer the main checkout over an auto-created worktree, whose branch name would start with `claude/`.
 - Integration tests need a throwaway PostgreSQL and Redis; the required environment variable **names** are in `.github/workflows/backend.yml` and `.env.example`. Never commit values.
 - **Integration tests that need PostgreSQL skip silently when it is unreachable** (about 41 of them). Confirm they actually ran before trusting a green result.
 - CI has a PostgreSQL service but no Redis service, and no coverage or dependency-scanning tooling.
