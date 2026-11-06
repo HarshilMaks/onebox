@@ -43,6 +43,8 @@ env.bak/
 .qodo/
 .agents/
 .claude/
+research_notes/
+reports/
 
 # secrets
 *.json
