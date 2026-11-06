@@ -111,7 +111,7 @@ Rules:
 1. **Read** methods run only if the switch is Read or Propose. **Writes** exist only as `action_schemas()`: typed payloads that become proposals. No connector method writes outside `execute()`, and `execute()` is called only by the ledger after approval.
 2. `execute()` must end in one of three outcomes: **confirmed success**, **confirmed rejection**, or **unknown** (raise `AmbiguousActionOutcome`). Unknown is never retried.
 3. `reconcile()` is a read-only lookup that decides whether an unknown write landed. Google has strong lookups (Gmail Message-ID marker search, deterministic Calendar event ID, Tasks marker). A generic MCP connector has none, so its unknown outcomes stay *needs checking*.
-4. **Switch semantics:** Off = no token use; Read = read scopes only; Propose = read plus proposals. Enforced twice: by the tool allowlist and by the scopes requested (scope tiering; see ADR-0005, and the spike on `include_granted_scopes`).
+4. **Switch semantics:** Off = the token is not used (only Disconnect removes it); Read = read tools only; Propose = read plus proposals. Enforced by the tool allowlist and re-checked when an approved action is claimed; narrower scopes are requested where the provider allows (see [ADR-0005](DECISIONS/ADR-0005-permission-switches.md) and the spike on `include_granted_scopes`).
 5. **MCP connector:** write tools are always wrapped as proposals, tool annotations such as `readOnlyHint` are untrusted hints, and OneBox keeps its own allowlist. See ADR-0003.
 
 ## 7. Data model
@@ -213,7 +213,19 @@ erDiagram
   }
 ```
 
-`onebox_tokens` evolves into `connections` (many per user). `pending_actions` gains `connection_id`, `source_ref` and `reason`. The exact schema is fixed in the Phase 1 plan.
+`onebox_tokens` evolves into `connections` (many per user). `pending_actions` gains `connection_id`, `source_ref` and `reason`. `gmail_triage_work`, `gmail_notification_jobs` and `gmail_mailbox_states` gain a `connection_id`, and the audit table stops cascading with its action and keeps only ids, hashes and states ([ADR-0012](DECISIONS/ADR-0012-data-lifecycle.md)). The exact schema is fixed in TASKS 2.3 and 2.6.
+
+**What "delete my data" removes** (planned, task 2.6):
+
+| Data store | Removed on disconnect | Removed on delete-my-data | Notes |
+|---|---|---|---|
+| Tokens | yes | yes | Revoked at the provider first |
+| Triage summaries and reader output | yes | yes | |
+| Notification jobs and mailbox state | yes | yes | |
+| Cached mail (Redis) | yes | yes | Also expires in 5 minutes |
+| Proposals | kept until retention | yes | Payloads hold message text |
+| Audit rows | kept (ids, hashes, states) | kept for the documented period | No content; no cascade |
+| Message tombstones | kept 90 days | kept 90 days | Provider ids only |
 
 ## 8. Key flows
 
@@ -238,6 +250,8 @@ sequenceDiagram
   A->>A: encrypt token (AES-GCM, per-user context); store connection with switch
 ```
 
+The OAuth state stores a hash of the session and a PKCE verifier, and the callback requires that same live session ([ADR-0011](DECISIONS/ADR-0011-identity-and-oauth-hardening.md)).
+
 ### 8.2 New mail to proposals [triage BUILT; bridge PLANNED]
 
 ```mermaid
@@ -257,7 +271,7 @@ sequenceDiagram
   W->>D: claim triage work (unique mailbox and message)
   W->>L: email as untrusted data; typed output [PLANNED]
   L-->>W: summary and suggestions
-  W->>W: validate: recipient is the verified sender only, local-day free/busy, daily cap [PLANNED]
+  W->>W: validate: recipient and attendees are the verified sender only, local-day free/busy, daily cap [PLANNED]
   W->>D: save summary; create proposals with source link [PLANNED]
 ```
 
@@ -285,13 +299,15 @@ sequenceDiagram
   A-->>U: action state
 ```
 
+Planned changes to this flow ([ADR-0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md)): the approve request carries the payload hash the user saw; the claim rechecks the connection, the Propose switch and the sending account; editing a proposal atomically rejects the original; and a confirmed result is accepted after the lease expired when the attempt token still matches.
+
 ### 8.4 Unknown outcome and reconcile [BUILT]
 
-An operator calls `POST /actions/{id}/reconcile`. A read-only lookup (Gmail marker search, Calendar event get, Tasks marker scan) moves the action to `succeeded`, `failed`, or leaves it `reconciliation_required` with fresh evidence. An expired-lease `processing` action is promoted to `reconciliation_required` on the next approve attempt or reconcile call. **Gap:** nothing promotes it automatically yet (ROADMAP step 0.4).
+An operator calls `POST /actions/{id}/reconcile`. A read-only lookup (Gmail marker search, Calendar event get, Tasks marker scan) moves the action to `succeeded`, `failed`, or leaves it `reconciliation_required` with fresh evidence. An expired-lease `processing` action is promoted to `reconciliation_required` on the next approve attempt or reconcile call. **Gaps:** nothing promotes it automatically yet (TASKS 0.4), and a Gmail lookup that finds nothing returns `failed` at once, although the write may land late or hide in spam or trash. Planned (ADR-0010, TASKS 0.13): no `failed` within 10 minutes of the attempt, spam and trash included, and a read-only reconcile that owners can run on their own action.
 
 ### 8.5 Disconnect [PLANNED]
 
-Revoke the token at the provider, delete the connection and its tokens, keep or delete audit rows according to the user's choice, and confirm in the timeline.
+Revoke the token at the provider; delete the connection, its tokens, summaries, jobs and cached data; keep only content-free audit rows under the retention in [ADR-0012](DECISIONS/ADR-0012-data-lifecycle.md); confirm in the timeline.
 
 ## 9. State machines
 
@@ -363,6 +379,8 @@ All figures are [ESTIMATE] unless a source is named; assumptions are stated so t
 - **Gmail quota (official):** 6,000 units per minute per user; `messages.send` costs 100 units; consumer accounts block above about 500 sent emails per day. Not a constraint at demo scale.
 - **Calendar:** 600 requests per minute per user. **Tasks:** 50,000 requests per day. **Graph (Outlook):** 10,000 requests per 10 minutes per mailbox, 4 concurrent.
 - **Gmail push:** at most 1 notification per second per user; `watch` must be renewed at least every 7 days (daily recommended).
+- **Automation fairness [PLANNED, TASKS 2.5]:** a job covers at most 10 messages and renews its lease per message (today a job holds a 120-second lease and up to 100 messages); work is scheduled round-robin across connections so one flood cannot starve the rest; push for a disconnected mailbox returns 2xx and queues a resync, so Pub/Sub does not retry forever.
+- **Cost and rate caps [PLANNED, TASKS 6.3]:** per-user counters live in Postgres and fail closed to a visible `deferred` state, so an exhausted cap never silently drops mail or advances the cursor.
 - **Hosting:** a single VM at roughly $6–12 per month, about $21 with managed Postgres (third-party prices).
 
 ## 13. Observability
@@ -373,13 +391,18 @@ All figures are [ESTIMATE] unless a source is named; assumptions are stated so t
 
 | Decision | Solves | Worsens | Revisit when | ADR |
 |---|---|---|---|---|
-| Approval enforced in code | Prompt tricks cannot cause a write | A person must review | Never for sends | [0001](DECISIONS/ADR-0001-approve-first.md) |
-| Own Postgres ledger | Full control; small | Must maintain it | Multi-step flows with long timers | [0002](DECISIONS/ADR-0002-own-ledger.md) |
+| Approval enforced in code | Prompt tricks cannot cause a write | A person must review | A written, tested exception for one reversible action; never for sends | [0001](DECISIONS/ADR-0001-approve-first.md) |
+| Own Postgres ledger | Full control; small | Must maintain it | A second executing instance, or multi-step flows with timers | [0002](DECISIONS/ADR-0002-own-ledger.md) |
 | Native connectors, MCP for the generic path | Real reconciliation where it matters | Slow to add apps | A third connector is requested | [0003](DECISIONS/ADR-0003-native-connectors-mcp-generic.md) |
 | OIDC separate from per-app consent | Least privilege; clear UX | More consent steps | Never | [0004](DECISIONS/ADR-0004-oidc-vs-app-consent.md) |
 | Off/Read/Propose switches | Simple, enforceable | Coarse | Per-tool control is requested | [0005](DECISIONS/ADR-0005-permission-switches.md) |
 | Encrypted refresh tokens | Background triage works | Tokens are a target | A KMS is available | [0006](DECISIONS/ADR-0006-token-storage.md) |
-| Reader has no tools | Injection cannot act | Less flexible | Measured need | [0007](DECISIONS/ADR-0007-zero-tool-reader.md) |
+| Reader has no tools | Injection cannot act | Less flexible | A documented incident, or a tool-enabled run must read untrusted content | [0007](DECISIONS/ADR-0007-zero-tool-reader.md) |
+| Scope boundaries and freeze rule | A finishable scope | Less breadth | Phase 6 is done and a measured need exists | [0008](DECISIONS/ADR-0008-scope-boundaries.md) |
+| Testing mode plus demo mode | Safe demonstration | Weekly re-consent | A real multi-user service is intended | [0009](DECISIONS/ADR-0009-demo-strategy.md) |
+| Hash-bound approval; reconcile quiet period | No stale or early-failed writes | More fields, states and tests | A provider offers send idempotency keys | [0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md) |
+| Session-bound OAuth; own sessions | No forwarded-link account linking | More code than a library flow | A managed auth provider is adopted | [0011](DECISIONS/ADR-0011-identity-and-oauth-hardening.md) |
+| Connection-scoped data; tombstones | Real deletion; no re-proposals | Migration work | Scale beyond the demo | [0012](DECISIONS/ADR-0012-data-lifecycle.md) |
 
 ## 15. Open design questions
 

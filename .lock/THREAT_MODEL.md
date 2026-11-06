@@ -52,7 +52,13 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 | T12 | **SSRF through connector fetches** | SSRF-safe HTTP client | PLANNED | Low |
 | T13 | **Cross-user data exposure** (Asana MCP tenant-isolation bug) | Owner-scoped queries (actions, triage); add cross-user tests everywhere | BUILT / PLANNED | Low |
 | T14 | **Cost abuse** | Per-user daily caps and rate limits | PLANNED | Low |
-| T15 | **Ledger bypass** | Remove or route REST send, delete and trash through the ledger | PLANNED (ROADMAP 0.6) | Medium until done |
+| T15 | **Ledger bypass** | Remove or route every REST mail write through the ledger | PLANNED (TASKS 0.6) | Medium until done |
+| T16 | **A forwarded OAuth link attaches the victim's account to the attacker's user** | The OAuth state stores a session hash and a PKCE verifier; the callback requires the same live session ([ADR-0011](DECISIONS/ADR-0011-identity-and-oauth-hardening.md)) | PLANNED | Low; today only the email-equality check blocks it, and only for Google |
+| T17 | **A stale or edited proposal runs** (an old tab approves unedited text; Off or Read still runs queued proposals; a send leaves the wrong mailbox) | Approve carries the payload hash; claim rechecks connection, switch and sending account; edit supersedes the original ([ADR-0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md)) | PLANNED | Low |
+| T18 | **A write lands late and reconcile says `failed`** (search lag, spam or trash, a slow provider) | No `failed` inside a 10-minute quiet period; include spam and trash; evaluate draft-then-send (ADR-0010) | PLANNED | Medium |
+| T19 | **Injection through invites and look-alike text** (attendees, bidi characters, look-alike domains, calendar data in the reader prompt) | Attendees and recipients limited to the verified sender; reject bidi and control characters; show punycode; the reader sees one message and no calendar data ([ADR-0007](DECISIONS/ADR-0007-zero-tool-reader.md)) | PLANNED | Medium |
+| T20 | **A restored backup resurrects executed approvals** | After a restore, expire `pending` and quarantine `processing` actions before serving ([ADR-0012](DECISIONS/ADR-0012-data-lifecycle.md)) | DOCUMENT | Low |
+| T21 | **Deletion leaves data behind** (summaries, jobs, caches, audit) | Connection-scoped data and a deletion matrix (ADR-0012; [ARCHITECTURE.md](ARCHITECTURE.md) §7) | PLANNED | Medium |
 
 ## 6. Breach scenarios
 
