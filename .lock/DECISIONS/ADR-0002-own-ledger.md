@@ -18,7 +18,7 @@ Keep and extend the Postgres ledger. The problem here is **action governance** (
 
 ## Trade-offs
 
-Solves: full control of the approval and ambiguity semantics with a small footprint. Worsens: we maintain it. Revisit when: multi-step flows with long timers appear; then evaluate DBOS.
+Solves: full control of the approval and ambiguity semantics with a small footprint. Worsens: we maintain it. Revisit when: a second executing instance is added, or multi-step flows with long timers appear; then evaluate DBOS.
 
 ## Consequences
 

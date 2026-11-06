@@ -8,7 +8,7 @@ Competitors' controls are coarse or hard to scope: Zapier cannot scope its MCP s
 
 ## Decision
 
-Each connection has one switch. **Off:** the token is not used. **Read:** read scopes and read tools only. **Propose:** read plus proposals (never direct writes). Enforced twice: by the per-run tool allowlist (`server/agent_policy.py`) and, where the provider allows, by requesting write scopes only when Propose is enabled (scope tiering).
+Each connection has one switch. **Off:** the token is not used. **Read:** read scopes and read tools only. **Propose:** read plus proposals (never direct writes). Enforced by the per-run tool allowlist (`server/agent_policy.py`) and re-checked when an approved action is claimed ([ADR-0010](ADR-0010-approval-and-execution-protocol.md)). Where the provider allows it, write scopes are requested only when Propose is enabled (scope tiering), but a granted scope cannot be downgraded without a re-consent or a revoke, and **Off** leaves a live token unused: only Disconnect removes it.
 
 ## Options considered
 

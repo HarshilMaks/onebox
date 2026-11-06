@@ -8,7 +8,7 @@ Email-borne prompt injection is documented (EchoLeak; the Superhuman AI exfiltra
 
 ## Decision
 
-Any model run that sees untrusted content (mail bodies, invites, tickets) has **no tools** and returns **typed fields**. Plain code validates them (recipient is the verified sender only; dates parse; the slot is free on the user's local day; a daily cap applies) and creates proposals. Output is rendered as plain text. The model has no outbound channel (no URL fetch, image load or web search).
+Any model run that sees untrusted content (mail bodies, invites, tickets) has **no tools** and returns **typed fields**. Plain code validates them (reply recipients and event attendees are the verified sender only; dates parse; the slot is free on the user's local day; bidi and control characters are rejected and look-alike domains are shown in punycode; a daily cap applies) and creates proposals. "Verified sender" means the receiving server recorded `dmarc=pass` for the message; otherwise the mail is shown but earns no reply or invite proposal. The reader sees one message and no calendar data. Output is rendered as plain text. The model has no outbound channel (no URL fetch, image load or web search).
 
 ## Options considered
 
@@ -18,7 +18,7 @@ Any model run that sees untrusted content (mail bodies, invites, tickets) has **
 
 ## Trade-offs
 
-Solves: injection cannot act. Worsens: less flexible than a free agent. Revisit when: a measured need appears.
+Solves: injection cannot act. Worsens: less flexible than a free agent. Revisit when: a documented incident occurs, or a tool-enabled run must read untrusted content.
 
 ## Consequences
 

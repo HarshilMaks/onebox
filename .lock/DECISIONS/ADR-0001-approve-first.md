@@ -8,7 +8,7 @@ Assistants that act directly have shipped unapproved actions and false "done" cl
 
 ## Decision
 
-The AI never executes an external write. Every send, reply, event and task becomes an immutable proposal. Only the ledger executes, after a person approves. Approval is single-use, bound to the payload hash, owned by the user, and expires (15 minutes by design). Drafts and mark-as-read run immediately today [OPEN: whether they also become proposals].
+The AI never executes an external write. Every send, reply, event and task becomes an immutable proposal. Only the ledger executes, after a person approves. Approval is single-use, bound to the payload hash, owned by the user, and expires (15 minutes for chat-created proposals, 48 hours for email-bridge suggestions; see [ADR-0010](ADR-0010-approval-and-execution-protocol.md)). Drafts and mark-as-read run immediately today [OPEN: whether they also become proposals].
 
 ## Options considered
 
@@ -18,7 +18,7 @@ The AI never executes an external write. Every send, reply, event and task becom
 
 ## Trade-offs
 
-Solves: prompt tricks cannot cause a write. Worsens: review fatigue. Mitigation: a per-user daily cap on suggestions and honest status. Revisit when: reversible, low-risk actions have measured error rates — never for sends.
+Solves: prompt tricks cannot cause a write. Worsens: review fatigue. Mitigation: a per-user daily cap on suggestions and honest status. Revisit when: the owner approves a written, tested exception for one specific reversible action. Sends never become autonomous.
 
 ## Consequences
 

@@ -10,7 +10,7 @@ The category is crowded: Gmail and Outlook bundle basic AI help; chat assistants
 
 **In:** Google first, then Outlook; one approval queue; per-app switches; email-to-proposals; a small web client; demo mode. **Out:** RAG or vector search; a chat UI; auto-send or autonomy; public launch and Google verification; more connectors before Google and Outlook both work; notifications, voice, inbox search, meeting notes, scheduling links, follow-up reminders, writing in the user's voice; Zoho; an eval harness as a deliverable; "zero retention" claims.
 
-**Freeze rule:** nothing enters unless it fixes a documented failure in the email-to-action loop and has a test. Everything else goes to the parking list in [ROADMAP.md](../ROADMAP.md).
+**Freeze rule:** nothing enters unless it fixes a documented failure in the email-to-action loop and has a test, or it is an owner-approved milestone. Outlook (phase 5) is such a milestone and a stretch goal: it proves the connector contract is real, but it fixes no documented failure. Everything else goes to the parking list in [ROADMAP.md](../ROADMAP.md).
 
 ## Options considered
 
