@@ -1,120 +1,72 @@
 # OneBox — Roadmap
 
-**Status:** living · 2026-11-06 · all durations are [ESTIMATE] for one developer, in working days.
-**Freeze rule:** nothing enters this roadmap unless it **fixes a documented failure in the email-to-action loop** and **has a test**. New ideas go to the parking list in §9.
+**Status:** living · 2026-11-06 · all durations are [ESTIMATE] for one developer, in working days, summed from the task sizes in [TASKS.md](TASKS.md).
+**What this file is:** the order of the phases, the totals, the cut lines and the freeze rule. **Every task** (dependencies, branch, done-when, commit plan) is in [TASKS.md](TASKS.md); this file does not repeat it.
+
+## Freeze rule
+
+Nothing enters this roadmap unless it **fixes a documented failure in the email-to-action loop and has a test**, or it is an **owner-approved milestone** ([ADR-0008](DECISIONS/ADR-0008-scope-boundaries.md)). Outlook is such a milestone and is a stretch. New ideas go to the parking list below.
 
 ```mermaid
 flowchart LR
   P0[Phase 0 Foundations] --> P1[Phase 1 Identity]
-  P1 --> P2[Phase 2 Connector contract and Google refactor]
+  P1 --> P2[Phase 2 Connector contract and data lifecycle]
   P2 --> P3[Phase 3 Email to proposals]
-  P3 --> P4[Phase 4 Web client and activity]
-  P2 --> P5[Phase 5 Outlook connector]
+  P3 --> P4[Phase 4 Web client]
   P4 --> P6[Phase 6 Demo and packaging]
-  P5 --> P6
-  P6 -.-> P7[Optional MCP connector]
+  P6 -.-> P5[Phase 5 Outlook, stretch]
+  P5 -.-> P7[Optional MCP connector]
 ```
 
-**Totals:** Google loop (phases 0–4 and 6): about 23–37 days, roughly 5–7 weeks. With Outlook (phase 5): about 38–62 days, roughly 8–12 weeks.
-**Working method:** every step is test-first (see [TEST_STRATEGY.md](TEST_STRATEGY.md)), one commit per step, conventional commits, never push without the owner's approval. Where a step lands follows [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) §3 (owner decision, 2026-11-06): **minor steps are committed directly on `main`; major steps get a branch with a plain name (never `claude/`) and are reviewed before merging.** The default for each step is in the table below. Each step's exit criteria must be shown by a command or a test, not by assertion.
+## Phases, milestones and estimates
 
-### Where each step lands (default; when unsure, use a branch)
+| Phase | Outcome | Milestone | Tasks | Days [ESTIMATE] | Branch |
+|---|---|---|---|---|---|
+| 0 Foundations | Audit bugs fixed; every write goes through the ledger; CI covers branches | MS0 | 0.1–0.13 | 9–18 | mostly `main`; three plain branches |
+| 1 Identity | Sign-in with Google; opaque sessions | MS1 | 1.1–1.3 | 3–7 | `feat/identity` |
+| 2 Connector contract and data lifecycle | Connections, Off/Read/Propose, disconnect, deletion | MS1 | 2.1–2.6 | 8–15 | `feat/connector-contract` |
+| 3 Email to proposals | New mail becomes validated suggestions | MS2 | 3.1–3.6 | 6–11 | `feat/email-to-proposals` |
+| 4 Web client | Four screens; review and approve in a browser | MS2 | 4.0–4.3 | 5–11 | `feat/web-client` |
+| 6 Demo and packaging | A stranger runs the demo from the README | MS4 | 6.1–6.4 | 4–8 | `feat/demo-and-packaging` |
+| **Google loop** | **Phases 0–4 and 6** | | | **35–70 (7–14 weeks; plan on about 10)** | |
+| 5 Outlook (stretch) | Second provider; cross-provider demo | MS3 | 5.0–5.4 | 13–22 | `feat/outlook-connector` |
+| **With Outlook** | | | | **48–92 (10–18 weeks; plan on about 14)** | |
 
-| Step or phase | Lands on | Branch name |
-|---|---|---|
-| 0.1 | `main` | — |
-| 0.2, 0.3 (small bug fixes with tests) | `main` | — |
-| 0.4 (ledger state change) | branch | `fix/stuck-action-sweep` |
-| 0.5 (API error contract and client types) | branch | `refactor/error-envelope` |
-| 0.6 (removes endpoints and a scope) | branch | `fix/remove-ledger-bypasses` |
-| 0.7 | `main` for README fixes and dead-code removal; branch if the NULL handling needs a migration | `fix/json-null-handling` |
-| Phase 1 | branch | `feat/identity` |
-| Phase 2 | branch | `feat/connector-contract` |
-| Phase 3 | branch | `feat/email-to-proposals` |
-| Phase 4 | branch | `feat/web-client` |
-| Phase 5 | branch | `feat/outlook-connector` |
-| Phase 6 | branch | `feat/demo-and-packaging` |
-| Optional MCP connector | branch | `feat/mcp-connector` |
+Why these totals are higher than the first draft (5–7 and 8–12 weeks): the review found work the first plan lacked. That work is 0.10–0.13 (CI on branches, push tests, shared fakes, reconcile quiet period), the whole of 2.6 (data lifecycle), 3.6 (tombstones), the hash-bound approval in 4.1, and the XL size of the Outlook tasks. The numbers do not include provider surprises, review rounds or learning a new toolchain. Treat the low end as a best case.
 
-## Phase 0 — Foundations and audit fixes (1–2 days) · milestone M0
+## Working method
 
-| Step | Task | Test first | Exit criteria |
-|---|---|---|---|
-| 0.1 | Confirm local `main` is in sync with `origin/main` and the tree is clean | — | `git status` clean; baseline suite green |
-| 0.2 | Isolate retention-cleanup failure so the worker loop continues (a failing cleanup currently also skips the heartbeat and the job claim) | Cleanup raises → loop keeps processing jobs and keeps its heartbeat | Test red then green |
-| 0.3 | Cap triage retries using the existing `attempt_count` | Poison message stops after N attempts → `dead_letter` | Test red then green |
-| 0.4 | Automatic sweep: expired-lease `processing` → `reconciliation_required` with an audit event | Crash-point test: row stuck past lease is promoted | Test red then green; alert metric defined |
-| 0.5 | Error envelope with field-level validation details and stable codes; fix the typed client's error type | Invalid `status` returns the offending field | Contract test; `scripts/generate_openapi.py --check` passes |
-| 0.6 | Remove `DELETE /mail/emails/{id}` and the broad `mail.google.com` scope after confirming `gmail.modify` suffices; route or remove REST send and trash; dedupe repeated route error handling | Ledger-bypass test: no external write outside the ledger | Invariant 1 test green |
-| 0.7 | Drop subject-keyword skipping; store JSON null as SQL NULL (`token_json`); remove dead code; fix README claims (no "exactly once", no "search messages") | Subject "Congrats on your promotion" is triaged; `IS NULL` check finds credential-less rows | Tests green; README reviewed against [THREAT_MODEL.md](THREAT_MODEL.md) §8 |
+Every task is test-first ([TEST_STRATEGY.md](TEST_STRATEGY.md)), split into the commits listed in [TASKS.md](TASKS.md), committed with conventional messages and never pushed without the owner's approval. Where a task lands follows [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) §3: **minor tasks go straight to `main`; major tasks get a plainly named branch (never `claude/`) and are reviewed before merging.** A task's exit criteria are shown by a command or a test, not by assertion.
 
-**Cut line:** none; this phase is the base.
+## The demo-critical path
 
-## Phase 1 — Identity (3–5 days) · milestone M1 (part 1)
+If time runs out, these tasks alone make a convincing demo of the core claim (the AI proposes, a person approves, it runs once, an unclear outcome is flagged, nothing bypasses the queue):
 
-| Step | Task | Test first | Exit criteria |
-|---|---|---|---|
-| 1.1 | OpenID Connect sign-in: state, nonce, PKCE; validate ID token (iss, aud, exp, nonce); key users by `sub` | Tampered nonce or wrong audience is rejected | Invalid tokens rejected in tests |
-| 1.2 | Opaque server-side sessions with short lifetime; CSRF and Origin checks; replace the external-JWT dependency | Expired or forged session returns 401; cross-origin POST rejected | Tests green; old JWT path removed or flagged for demo only |
-| 1.3 | `users` and `user_settings` (time zone, working hours) | Settings isolated per user | Cross-user test green |
-| 1.4 | Demo login (no Google) for demo mode | Demo user cannot reach real connections | Test green |
+| Task | Why it cannot be dropped |
+|---|---|
+| 0.1, 0.4, 0.6 | A trustworthy baseline: stuck actions are promoted and no write bypasses the ledger |
+| 1.1, 1.2 | Real sign-in and sessions |
+| 2.2, 2.3 | The connector contract and the Off/Read/Propose switches ("+") |
+| 3.1–3.3 | New mail becomes validated proposals |
+| 4.0 | At least the suggestions queue, so a person can approve |
+| 6.1, 6.4 | A demo a stranger can run, and the README that explains it |
 
-## Phase 2 — Connector contract and Google refactor (3–5 days, plus spikes 1–2) · M1 (part 2)
+## Order of sacrifice
 
-| Step | Task | Test first | Exit criteria |
-|---|---|---|---|
-| 2.1 | Spikes on a throwaway account: Gmail Message-ID survival on send; `include_granted_scopes` versus scope tiering; Tasks scope tier | Written result recorded in an ADR note | Findings in [PRD.md](PRD.md) §9 closed |
-| 2.2 | Define the connector contract; implement `GoogleConnector` over the existing handlers | Contract tests every connector must pass | Existing suite stays green |
-| 2.3 | `connections` with Off / Read / Propose; token encrypted per connection; "+" flow with incremental consent | Switch Off blocks all token use; Read blocks proposals | Policy tests green |
-| 2.4 | Disconnect: revoke at the provider, delete tokens, confirm | Revoke endpoint called; row gone; later calls fail closed | Invariant 13 test green |
-| 2.5 | Automation for every connection (per-connection watch, cursor, resync) instead of one configured mailbox | Two mailboxes processed independently | Isolation test green |
+When the plan slips, cut from the top of this list and stop as soon as it fits:
 
-**Cut line:** if time is short, keep one Google connection per user.
+1. Phase 5 (Outlook) and the optional MCP connector.
+2. 4.3 polish, then the activity screen, then the digest screen (keep the suggestions queue and settings).
+3. 3.5 fault-injection breadth (keep one action type) and 3.6 bounded resync.
+4. 2.5 multi-mailbox fairness (keep one Google connection per user).
+5. 0.9 coverage reporting and 0.12 shared fakes.
 
-## Phase 3 — Email to proposals (5–8 days) · M2 (part 1)
+**Never cut:** 0.4, 0.6, 0.13, 1.1, 1.2, 2.3, 2.4, 2.6 and 3.2. They are the guarantees the project claims.
 
-| Step | Task | Test first | Exit criteria |
-|---|---|---|---|
-| 3.1 | Typed triage output (summary plus suggestions) from the zero-tool reader | Output schema violations are rejected | Parser tests green |
-| 3.2 | Deterministic validator: recipient is the verified sender only (today `resolve_reply_target` prefers `Reply-To`); local-day free/busy; daily cap; dedupe by message and type | Reply-To and Cc never become recipients; DST-boundary table; cap enforced | Invariants 8 and 9 green |
-| 3.3 | Create proposals with source link and short reason; idempotent per message and suggestion | Re-triaging the same mail creates no duplicates | Idempotency test green |
-| 3.4 | Honest status: assistant text never claims success unless confirmed | Pending action → reply says "waiting for your approval" | Invariant 10 green |
-| 3.5 | Fault-injection tests with a wrapper around the provider HTTP layer (lost response after acceptance) | Duplicate effects are zero per action type | Invariant 4 and M2 green |
+## Parking list (frozen)
 
-## Phase 4 — Web client and activity (8–12 days) · M2 (part 2)
+Chat UI, notifications, voice, inbox search, meeting notes, scheduling links, follow-up reminders, writing in the user's voice, Zoho, passkey-signed approvals, an approver study, RAG, an eval harness, Google verification. Simplification candidates S-1 and S-2 are tracked in [TASKS.md](TASKS.md) X.4 and must be decided before the phase that needs them.
 
-| Step | Task | Exit criteria |
-|---|---|---|
-| 4.1 | Four screens: digest, suggestions queue, activity, connect and settings; plain-text rendering only | A first-time viewer completes review-and-approve (observation) |
-| 4.2 | API additions: activity timeline endpoint; edit-before-approve (creates a new proposal) | Contract tests; OpenAPI regenerated |
-| 4.3 | Conflict warning on event cards; "needs checking" state with resolve action | UI test against fixture proposals |
+## Risks that can move the dates
 
-Default stack: Vite, React and TypeScript with an off-the-shelf component library, using `frontend-client-types.ts` as the typed client. [OPEN until this phase starts]
-**Cut line:** drop the optional "Today" panel first, then edit-before-approve, then activity polish.
-
-## Phase 5 — Outlook connector (15–25 days) · M3
-
-| Step | Task | Exit criteria |
-|---|---|---|
-| 5.1 | Graph OAuth for a personal account; read mail | Connection works on a test account |
-| 5.2 | Send and reply with reconciliation through Sent Items; create event using the event `transactionId` | Contract tests pass; lost-response test shows *needs checking* where the lookup is weak |
-| 5.3 | Polling for new items first (webhooks later) | New Outlook mail yields suggestions |
-| 5.4 | Cross-provider demo: Outlook mail → Google Calendar event, approved once | Scripted run passes (M5) |
-
-**Cut line:** this phase is optional. Without it, the Google loop is a complete project.
-
-## Phase 6 — Demo and packaging (3–5 days) · M4
-
-Demo mode (synthetic mailbox, canned model output, fake providers; no sign-in); single-VM deploy with TLS and health checks; three alerts (health, oldest pending job, `reconciliation_required` older than N minutes) plus a spend alert; 90-second video; README with diagram; ADRs finalized. **Exit:** a stranger follows the README to a running demo.
-
-## Optional — MCP connector (5–8 days)
-
-A generic connector for one app with an official MCP server (Jira or Notion), writes wrapped as proposals, unknown outcomes shown as *needs checking*. Only after phases 0–6.
-
-## 9. Parking list (frozen)
-
-Chat UI, notifications, voice, inbox search, meeting notes, scheduling links, follow-up reminders, writing in the user's voice, Zoho, passkey-signed approvals, an approver study, RAG, eval harness, Google verification.
-
-## 10. Risks that can move the dates
-
-Frontend effort (largest unknown); Outlook reconciliation behavior; weekly token expiry in Testing mode; scope tiering conflict with Google's grant merging (spike 2.1).
+Frontend effort (the largest unknown, and the reason S-2 exists); Outlook reconciliation behavior; weekly token expiry in Google's Testing mode; the scope-tiering conflict with Google's grant merging (spike 2.1); the data-lifecycle migration (2.6) touching four tables at once.

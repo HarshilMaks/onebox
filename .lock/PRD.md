@@ -125,7 +125,7 @@ Owner: the project owner. Needed by: drafts and mark-as-read (before task 0.6); 
 | Outlook reconciliation is weaker than Gmail's | High | Medium | Treat unclear outcomes as *needs checking*; say so in the docs |
 | Scope growth | High | High | Freeze rule in [ROADMAP.md](ROADMAP.md); cut lines |
 | Google Testing-mode token expiry breaks the demo weekly | High | Low | Clear "reconnect needed" state; demo mode |
-| Solo effort: about 7–14 weeks for the Google loop (plan on 10) and 9–18 with Outlook (plan on 14) [ESTIMATE, summed from the [TASKS.md](TASKS.md) sizes] | Medium | Medium | Ship the Google loop first; Outlook is a stretch milestone; the roadmap lists the order of sacrifice |
+| Solo effort: about 7–14 weeks for the Google loop (plan on 10) and 10–18 with Outlook (plan on 14) [ESTIMATE, summed from the [TASKS.md](TASKS.md) sizes] | Medium | Medium | Ship the Google loop first; Outlook is a stretch milestone; the roadmap lists the order of sacrifice |
 
 ---
 *Status: DRAFT. Requirements only; implementation plan in [ROADMAP.md](ROADMAP.md).*
