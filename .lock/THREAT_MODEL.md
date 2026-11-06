@@ -23,16 +23,16 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 
 ## 4. Non-negotiable design rules
 
-1. **The AI never executes a write.** It only proposes. [BUILT for send, reply, event, task]
+1. **The AI never executes a send, reply, event or task.** It only proposes. [BUILT] The assistant's `create_draft` and `mark_as_read` tools act immediately; whether they become proposals is open (PRD §9).
 2. **A model that reads untrusted content has no tools.** [BUILT for triage] This is the Rule of Two applied: it sees untrusted input and private data, but cannot change state.
 3. **Plain code validates model output** and creates proposals. [PLANNED]
 4. **Approval is enforced in code:** single use, bound to the payload hash, owned by the user, expiring. [BUILT: hash, claim, owner, expiry]
 5. **Model output is shown as plain text.** No markdown, no auto-loaded images or links, no URL-fetching or web-search tool for the model. [PLANNED]
 6. **Least privilege:** minimal scopes; per-app Off / Read / Propose switch. [PLANNED]
-7. **Tokens are encrypted**, with the key outside the database. [encryption BUILT; key placement PLANNED]
+7. **Tokens are encrypted**, with the key outside the database. [BUILT: the keyring is a read-only file mounted from the host; a key-management service is PLANNED]
 8. **Disconnect revokes at the provider** and deletes stored tokens. [PLANNED]
 9. **No tokens or mail bodies in logs or prompts**, enforced by a canary test. [PLANNED]
-10. **Every external write goes through the ledger.** [partly BUILT; see gaps in §7]
+10. **Every external write goes through the ledger,** except the assistant's `create_draft` and `mark_as_read`. [agent path BUILT; the REST mail endpoints still bypass it, see §7]
 
 ## 5. Threats and controls
 
@@ -43,10 +43,10 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 | T3 | **Duplicate or lost writes** (double-send bugs in other projects) | Idempotency key, claim, lease, attempt token, deterministic IDs and markers, reconciliation | BUILT | Gmail marker survival is a spike |
 | T4 | **Stolen session approves its own malicious proposals** | Opaque server-side sessions; short lifetime; single-use approvals; notice on each write; step-up approval | sessions PLANNED; step-up DOCUMENT | **High**, accepted for the demo |
 | T5 | **Database dump** | AES-256-GCM with per-user context; keyring for rotation | BUILT | Legacy plaintext column (see §7) |
-| T6 | **Server compromise reads keys from memory or config** (n8n file-read bug exposed the encryption secret) | Keep keys out of config on the host (KMS or separate secret store); minimal scopes; revoke; anomaly alerts | PLANNED / DOCUMENT | Medium |
-| T7 | **Forged push notifications** (advisories in another project) | Pub/Sub signed bearer token and service-account check | BUILT | Add a test |
+| T6 | **Server compromise reads keys from memory or config** (n8n file-read bug exposed the encryption secret) | The keyring is a host-mounted file, outside the database but readable by a host compromise; planned: a key-management service; minimal scopes; revoke; anomaly alerts | keyring file BUILT; KMS PLANNED; rest DOCUMENT | Medium |
+| T7 | **Forged push notifications** (advisories in another project) | Pub/Sub signed bearer token and service-account check | BUILT | Tests exist for 503, an invalid token and malformed claims; add wrong principal, missing bearer and the happy path |
 | T8 | **Approval consumed by a link prefetch or cross-site request** | Approvals are POST; CSRF and Origin checks | POST BUILT; CSRF PLANNED | Low |
-| T9 | **OAuth flow attacks** | One-time state; PKCE; exact redirect URI; nonce; ID-token validation | state BUILT; rest PLANNED | Low |
+| T9 | **OAuth flow attacks** | One-time state bound to user and email; fixed redirect URI; PKCE; nonce; ID-token validation | state and fixed redirect BUILT; rest PLANNED | Low |
 | T10 | **Token lifecycle gaps** (Google Testing mode expires tokens in 7 days; Microsoft does not revoke old refresh tokens on rotation; session revocation unsupported for personal accounts) | Handle `invalid_grant` as "reconnect needed"; real revoke on disconnect | PLANNED | Medium on Microsoft |
 | T11 | **Malicious or compromised MCP server** (tool poisoning, confused deputy) | Allowlist; annotations untrusted; no token forwarding; writes wrapped as proposals | PLANNED, optional | Medium |
 | T12 | **SSRF through connector fetches** | SSRF-safe HTTP client | PLANNED | Low |
@@ -58,7 +58,7 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 
 | Scenario | Attacker gets | What limits it | Build or document |
 |---|---|---|---|
-| **a) Database dump** | Encrypted tokens, proposals, summaries | AES-GCM with per-user context; no passwords exist; the key is not in the database | Build key-outside-DB; backfill and remove the legacy plaintext column |
+| **a) Database dump** | Encrypted tokens, proposals, summaries | AES-GCM with per-user context; no passwords exist; the key is not in the database | Move the keyring to a key-management service; backfill and remove the legacy plaintext column |
 | **b) Server compromise** | Live keys and decrypted tokens in memory | Minimal scopes; Off/Read/Propose; revoke; alerts | Build minimal scopes and revoke; document KMS and process isolation |
 | **c) Stolen session or JWT** | Can call the API **and approve actions** | Short lifetime, opaque sessions, single-use approvals, notice on each write | Build the first four; **document** step-up approval and passkey-signed approval as future work |
 | **d) Leaked signing or session secret** | Forge sessions | Separate secrets; rotation | Build separation; document rotation |
@@ -70,15 +70,18 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 - **Reply recipient resolution prefers `Reply-To`.** `resolve_reply_target` (in `server/services/pending_actions.py`) currently favors the `Reply-To` header over the verified `From`; ROADMAP step 3.2 and invariant 8 change this, and the first failing test will exercise the real behavior.
 - **No disconnect or revoke endpoint** that I have seen; verify.
 - **No rate limiting.**
-- **Ledger bypasses:** `DELETE /mail/emails/{id}` (the only reason for the broad `https://mail.google.com/` scope), `POST /mail/send`, trash and restore.
+- **Ledger bypasses:** every REST mail write: `DELETE /mail/emails/{id}` (the only reason for the broad `https://mail.google.com/` scope), `POST /mail/send`, `POST /mail/drafts`, read, unread, star, trash and restore. The assistant's `create_draft` and `mark_as_read` also act immediately.
 - **Legacy plaintext column** `token_json` still exists for a dual-read migration; a backfill command exists in `server/commands/`. Confirm no plaintext rows remain, then drop the column.
+- **What is stored in plain text:** proposal payloads (full message bodies for sends and replies), triage summaries and audit evidence are not encrypted; only tokens are. Redis caches parsed mail for 60 seconds (lists) and 300 seconds (message detail). Retention defaults: proposals 30 days, notification jobs 14 days, triage work 14 days.
 - `python-jose==3.3.0` is pinned; later releases fixed advisories (recalled, not scanned). Add dependency scanning, then bump or replace. CI has no dependency scanning or coverage tooling today.
-- **A failing retention cleanup can stop the worker loop**, and by reading `run_notification_worker` it would also skip the heartbeat and the job claim on each iteration (code reading only). Triage retries are uncapped. The HTTP error handler discards detail strings.
+- **A persistently failing retention cleanup starves the worker.** The loop survives (it logs and retries), but cleanup runs before the heartbeat, watch renewal and job claim, so no work is claimed and `/readyz` reports the worker stale. Triage retries are uncapped. The HTTP error handler discards detail strings.
 - Expired-lease `processing` actions are promoted only on the next approve or reconcile call, not automatically.
 
 ## 8. Allowed and forbidden claims
 
-**Allowed:** "The AI cannot send, book or delete anything; a person approves every write." · "A write is dispatched at most once; unclear outcomes are checked, not retried." · "OneBox never sees your password, keeps no chat memory, stores encrypted tokens, proposals, summaries and audit events, and one button deletes them." · "Measured on a fixed set: …" (only with the numbers).
+**Allowed:** "The assistant cannot send, reply, book or create a task on its own; a person approves each one." · "A write is dispatched at most once; unclear outcomes are checked, not retried." · "OneBox never sees your password and keeps no chat memory. Tokens are encrypted; proposals, summaries and audit events are stored as plain text with a retention limit." · "Measured on a fixed set: …" (only with the numbers).
+
+**Not yet allowed:** "one button deletes everything" (until ROADMAP 2.6 ships).
 
 **Forbidden:** "exactly once" · "zero retention" · "nothing is stored" · "cannot be tricked" · "GDPR compliant" · "Rule of Two compliant" (Meta says the rule is not sufficient) · "agentic" without a tool loop.
 
@@ -90,8 +93,8 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 | 2 | Scope tiering per switch | PLANNED (spike on `include_granted_scopes`) |
 | 3 | Opaque server-side sessions; separate secrets | PLANNED |
 | 4 | Validate the ID token once; key users by `sub` | PLANNED |
-| 5 | Exact redirect URI, state, PKCE | state BUILT; rest PLANNED |
-| 6 | Token encryption with per-user context; key outside the DB | context BUILT; key placement PLANNED |
+| 5 | Exact redirect URI, state, PKCE | state and fixed redirect BUILT; PKCE PLANNED |
+| 6 | Token encryption with per-user context; key outside the DB | BUILT (host-mounted keyring file); key-management service PLANNED |
 | 7 | Real revoke on disconnect | PLANNED |
 | 8 | Audit log, rate limits, notice on each write | audit BUILT; rest PLANNED |
 | 9 | MCP allowlist; annotations untrusted; no token forwarding | PLANNED, optional |

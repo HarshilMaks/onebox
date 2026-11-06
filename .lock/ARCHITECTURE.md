@@ -35,7 +35,7 @@ flowchart LR
 | **API** (FastAPI) | Auth, connections, assistant endpoints, approval API, push receiver, health | BUILT (auth and connections PLANNED) |
 | **Worker** | Leases notification jobs, runs triage, renews Gmail watch, resyncs, retention cleanup | BUILT |
 | **PostgreSQL 16** | System of record: tokens, proposals, audit, jobs, mailbox state | BUILT |
-| **Redis 7** | One-time OAuth state, mail cache generation counter | BUILT |
+| **Redis 7** | One-time OAuth state; a cache of parsed mail (lists and searches for 60 seconds, message detail for 300 seconds) and its generation counter | BUILT |
 | **Web client** | Digest, suggestions queue, activity, connect/settings | PLANNED |
 
 ```mermaid
@@ -61,10 +61,10 @@ The compose services as built are `postgres`, `redis`, `migrate`, `app` and `wor
 | Group | Endpoints | Notes |
 |---|---|---|
 | Actions (the ledger) | `GET /actions`, `GET /actions/{id}`, `POST /actions/{id}/approve`, `/reject`, `/reconcile` | Reconcile is operator-only |
-| Assistant | `POST /executive/`, `POST /generate-content/`, `POST /generate-stream/` | `/executive/` has tools; proposals only for writes |
+| Assistant | `POST /executive/`, `POST /generate-stream/`, `POST /generate-content/` | `/executive/` and `/generate-stream/` have tools: send, reply, event and task become proposals, while `create_draft` and `mark_as_read` (executive only) act immediately. `/generate-content/` has no tools. |
 | Google OAuth | `GET /agent/oauth/start`, `/agent/oauth/callback`, `POST /agent/verify_and_create_entry`, `GET /agent/status` | Needs an externally issued JWT today |
-| Mail REST | `GET /mail/emails`, `/mail/emails/{id}`, `POST …/read`, `/unread`, `/star`, `/trash`, `/restore`, `DELETE /mail/emails/{id}`, `POST /mail/drafts`, `/mail/send`, `GET /mail/search` | `DELETE` and `/mail/send` bypass the ledger (see [THREAT_MODEL.md](THREAT_MODEL.md)) |
-| Push and automation | `POST /mail/notifications`, `/mail/renew-watch`, `/mail/check-inbox`, `/mail/agent/check-inbox`, `GET /mail/agent/status`, `/mail/agent/health` | Push is signature-checked |
+| Mail REST | `GET /mail/emails`, `/mail/emails/{id}`, `POST …/read`, `/unread`, `/star`, `/trash`, `/restore`, `DELETE /mail/emails/{id}`, `POST /mail/drafts`, `/mail/send`, `GET /mail/search` | Every write here bypasses the ledger: send, drafts, read, unread, star, trash, restore and delete (see [THREAT_MODEL.md](THREAT_MODEL.md)) |
+| Push and automation | `POST /mail/notifications`, `/mail/renew-watch`, `/mail/check-inbox`, `/mail/agent/check-inbox`, `GET /mail/agent/status`, `/mail/agent/health` | Only `/mail/notifications` is signature-checked (Pub/Sub token); the others need the automation owner's JWT. `/mail/check-inbox` is a per-user inbox count, and `/mail/agent/check-inbox` always answers 409. |
 | Triage | `GET /mail/triage`, `/mail/triage/{id}` | Owner-scoped |
 | Health | `GET /livez`, `/readyz`, `/mail/health`, `GET /` | |
 
@@ -77,11 +77,11 @@ The compose services as built are `postgres`, `redis`, `migrate`, `app` and `wor
 | Ledger | `server/services/pending_actions.py` | Create, claim, execute, finalize, reconcile, expire, list |
 | Provider writes and lookups | `server/services/action_handlers.py` | Gmail, Calendar and Tasks writes; deterministic IDs and markers; reconciliation lookups |
 | Automation | `server/services/notification_jobs.py`, `server/workers/` | Job queue with leases, triage, watch renewal, resync |
-| Tool policy | `server/agent_policy.py` | Per-run tool allowlists and mutation budget |
+| Tool policy | `server/agent_policy.py`, `server/agent_tools.py` | Per-run tool allowlists and mutation budget; the tool registry |
 | Credentials | `server/services/credentials.py`, `server/security/` | Scopes; encrypted token codec with a keyring |
 | Inbound mail | `server/mail/` | Bounded MIME parsing; skip filter |
 | Integrations | `server/integrations/` | Google client, LLM adapter, Redis adapter |
-| Agent runtime | `agents.py`, `clients/prompt.py`, `tools/` | Prompts, tool callables that create proposals |
+| Agent runtime | `agents.py`, `clients/prompt.py`, `tools/` | Prompts; tool callables (send, reply, event and task create proposals; draft and mark-as-read act immediately) |
 | Schema | `alembic/versions/` | Migrations |
 | Typed client | `frontend-client-types.ts` | API types for a client |
 
@@ -305,16 +305,16 @@ stateDiagram-v2
   pending --> expired: past expires_at
   pending --> reconciliation_required: payload hash mismatch
   processing --> succeeded: provider confirmed
-  processing --> failed: provider rejected
-  processing --> reconciliation_required: unknown outcome or lease expired
+  processing --> failed: provider rejected or credentials failed before dispatch
+  processing --> reconciliation_required: unknown outcome, unexpected error or lease expired
   reconciliation_required --> succeeded: reconcile finds it
-  reconciliation_required --> failed: reconcile finds nothing
+  reconciliation_required --> failed: reconcile finds nothing for Gmail or Calendar
   reconciliation_required --> reconciliation_required: still unknown
 ```
 
 ### Background work [BUILT, retry edges simplified]
 
-`gmail_notification_jobs`: `pending → processing → succeeded`, or `dead_letter` after repeated failure. `gmail_triage_work`: `processing → succeeded | noop | dead_letter`. Both use leases and `next_attempt_at` for backoff. Known gap: triage retries are not capped (ROADMAP step 0.3).
+`gmail_notification_jobs`: `pending → processing → succeeded`. After `GMAIL_NOTIFICATION_MAX_ATTEMPTS` (default 5) a job returns to `pending` and the mailbox enters a bounded resync; a job reaches `dead_letter` only when that resync hits its cap (`GMAIL_RESYNC_MAX_MESSAGES`, default 100), the mailbox state is missing, or a worker dead-letters it. `gmail_triage_work`: `processing → succeeded | noop | dead_letter`. Both use leases (the job lease is 120 seconds) and `next_attempt_at` for backoff. Tasks that find nothing during reconcile stay `reconciliation_required`. Known gap: triage retries are not capped (ROADMAP step 0.3).
 
 ## 10. Security architecture
 
@@ -338,7 +338,7 @@ flowchart LR
   mail --> triage --> validate --> approve --> ledger --> providers[(Providers)]
 ```
 
-The model that reads untrusted content has **no tools**. Plain code turns its output into proposals. A person approves. Only the ledger executes. Details, breach scenarios and controls: [THREAT_MODEL.md](THREAT_MODEL.md).
+The model that reads untrusted content has **no tools** [BUILT for triage]. Plain code turning its output into proposals is [PLANNED]. A person approves, and the ledger executes agent-initiated writes; the REST mail endpoints in §4 still write directly until ROADMAP step 0.6. Details, breach scenarios and controls: [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## 11. Reliability and failure modes
 
@@ -350,7 +350,7 @@ The model that reads untrusted content has **no tools**. Plain code turns its ou
 | Two workers, same message | Lease plus unique `(mailbox, message)` row |
 | Gemini unavailable or slow | Triage work released with backoff; interactive call returns a provider error |
 | Redis down | Cache treated as miss; OAuth state flow fails closed |
-| Retention cleanup raises | Today: can stop the worker loop (ROADMAP 0.2). Target: isolated and logged |
+| Retention cleanup raises | Today the loop survives (it logs and retries), but cleanup runs before the heartbeat, watch renewal and job claim, so a persistent failure claims no work and `/readyz` reports the worker stale (ROADMAP 0.2). Target: cleanup isolated from the loop |
 | Gmail watch expires | Renewed by worker; resync on stale history id |
 
 ## 12. Capacity and cost estimate
@@ -367,7 +367,7 @@ All figures are [ESTIMATE] unless a source is named; assumptions are stated so t
 
 ## 13. Observability
 
-[BUILT] `/livez`, `/readyz`, correlation id binding. [PLANNED] one structured log line per model call (model, tokens, latency, finish reason, estimated cost, correlation id equal to the action id); alerts on health, oldest pending notification job, `reconciliation_required` older than N minutes, and daily spend. No tokens or mail bodies in logs (tested).
+[BUILT] `/livez`, `/readyz`, correlation id binding. [PLANNED] one structured log line per model call (model, tokens, latency, finish reason, estimated cost, correlation id equal to the action id); alerts on health, oldest pending notification job, `reconciliation_required` older than N minutes, and daily spend. No tokens or mail bodies in logs: a redaction filter exists today and the canary test is PLANNED (invariant 11).
 
 ## 14. Trade-offs
 
