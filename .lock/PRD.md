@@ -59,10 +59,10 @@ A person signs in with Google, adds apps with **"+"**, and sets each app to **Of
 | FR-4 | See a digest of new mail summaries, most important first | 3 |
 | FR-5 | Get suggestions (reply, event, task) from new mail as proposals, capped per day | 3 |
 | FR-6 | Review a proposal with exact payload, source link, short reason and conflict warning; edit it; approve or reject | 3, 4 |
-| FR-7 | Have an approved action run at most once, and have an unclear outcome flagged *needs checking* and resolvable | 0, 3 |
+| FR-7 | Have an approved action run at most once, and have an unclear outcome flagged *needs checking* and resolve it themselves with a read-only check | 0, 3, 4 |
 | FR-8 | Ask the assistant on demand to propose actions across connected apps | built |
 | FR-9 | See one activity timeline across apps | 4 |
-| FR-10 | Disconnect an app (revoke at the provider and delete stored tokens) and delete their data | 2 |
+| FR-10 | Disconnect an app (revoke at the provider; delete its tokens, summaries, jobs and cached data) and delete all their data; audit rows keep only ids, hashes and states | 2 |
 | FR-11 | Try the product in demo mode without signing in | 6 |
 | FR-12 | Be told "done" only when the provider confirmed | 3 |
 
@@ -97,13 +97,15 @@ Already built and kept: drafts and mark-as-read run immediately; send, reply, ev
 
 | # | Milestone | Outcome | Status |
 |---|---|---|---|
-| M0 | Foundations | Audit bugs fixed; honest README | pending |
-| M1 | Identity and connections | Sign-in, connections, switches, disconnect (Google) | pending |
-| M2 | The loop | New mail → suggestions → review → one effect | pending |
-| M3 | Second provider | Outlook connector and the cross-provider demo | pending |
-| M4 | Demo and packaging | Demo mode, deploy, video, docs | pending |
+| MS0 | Foundations | Audit bugs fixed; ledger bypasses closed; honest README | pending |
+| MS1 | Identity and connections | Sign-in, connections, switches, disconnect, deletion (Google) | pending |
+| MS2 | The loop | New mail → suggestions → review → one effect | pending |
+| MS3 | Second provider (stretch) | Outlook connector and the cross-provider demo | pending |
+| MS4 | Demo and packaging | Demo mode, deploy, video, docs | pending |
 
 ## 9. Open questions
+
+Owner: the project owner. Needed by: drafts and mark-as-read (before task 0.6); daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
 
 - [ ] Do drafts and mark-as-read become proposals under the Propose switch?
 - [ ] Default daily cap for suggestions and for model calls.
@@ -123,7 +125,7 @@ Already built and kept: drafts and mark-as-read run immediately; send, reply, ev
 | Outlook reconciliation is weaker than Gmail's | High | Medium | Treat unclear outcomes as *needs checking*; say so in the docs |
 | Scope growth | High | High | Freeze rule in [ROADMAP.md](ROADMAP.md); cut lines |
 | Google Testing-mode token expiry breaks the demo weekly | High | Low | Clear "reconnect needed" state; demo mode |
-| Solo effort roughly 8–12 weeks [ESTIMATE] | Medium | Medium | Ship Google loop first; Outlook is a cut line |
+| Solo effort: about 7–14 weeks for the Google loop (plan on 10) and 9–18 with Outlook (plan on 14) [ESTIMATE, summed from the [TASKS.md](TASKS.md) sizes] | Medium | Medium | Ship the Google loop first; Outlook is a stretch milestone; the roadmap lists the order of sacrifice |
 
 ---
 *Status: DRAFT. Requirements only; implementation plan in [ROADMAP.md](ROADMAP.md).*
