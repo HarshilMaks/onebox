@@ -12,17 +12,20 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 
 ## Reading order
 
-| # | Doc | It answers |
+| Group | Doc | It answers |
 |---|---|---|
-| 1 | [PRD.md](PRD.md) | What are we building, for whom, and how do we know it works? |
-| 2 | [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built (as-built vs planned), with diagrams |
-| 3 | [DECISIONS/](DECISIONS/) | Why each major choice was made (ADR-0001 … ADR-0009) |
-| 4 | [THREAT_MODEL.md](THREAT_MODEL.md) | What can go wrong, and what stops it |
-| 5 | [ROADMAP.md](ROADMAP.md) | Phases, steps, exit tests, cut lines, estimates |
-| 6 | [TEST_STRATEGY.md](TEST_STRATEGY.md) | How we test: TDD workflow, invariants, fakes |
-| 7 | [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) | Commands, CI, branching, definition of done |
-| 8 | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | The evidence behind each decision, with confidence tags |
-| 9 | [HANDOFF.md](HANDOFF.md) | Where we are now, and the prompt to resume work |
+| Product | [PRD.md](PRD.md) | What are we building, for whom, and how do we know it works? |
+| Product | [FRONTEND.md](FRONTEND.md) | What do the screens do, and what is the design system? |
+| Architecture | [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built (as-built vs planned), with diagrams |
+| Architecture | [DECISIONS/](DECISIONS/) | Why each major choice was made (ADR-0001 to ADR-0012) |
+| Architecture | [THREAT_MODEL.md](THREAT_MODEL.md) | What can go wrong, and what stops it |
+| Plan | [ROADMAP.md](ROADMAP.md) | Phases, milestones, estimates, cut lines |
+| Plan | [TASKS.md](TASKS.md) | Every task: status, dependencies, done-when, commit plan |
+| Engineering | [TEST_STRATEGY.md](TEST_STRATEGY.md) | How we test: TDD workflow, invariants, fakes |
+| Engineering | [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) | Commands, CI, branching, commits, definition of done |
+| Engineering | [AGENT_GUIDE.md](AGENT_GUIDE.md) | How AI agents and people work here, step by step |
+| Reference | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | The evidence behind each decision, with confidence tags |
+| Reference | [HANDOFF.md](HANDOFF.md) | Where we are now, and the prompt to resume work |
 
 ## Status legend
 

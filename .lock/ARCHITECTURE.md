@@ -330,7 +330,7 @@ stateDiagram-v2
 
 ### Background work [BUILT, retry edges simplified]
 
-`gmail_notification_jobs`: `pending → processing → succeeded`. After `GMAIL_NOTIFICATION_MAX_ATTEMPTS` (default 5) a job returns to `pending` and the mailbox enters a bounded resync; a job reaches `dead_letter` only when that resync hits its cap (`GMAIL_RESYNC_MAX_MESSAGES`, default 100), the mailbox state is missing, or a worker dead-letters it. `gmail_triage_work`: `processing → succeeded | noop | dead_letter`. Both use leases (the job lease is 120 seconds) and `next_attempt_at` for backoff. Tasks that find nothing during reconcile stay `reconciliation_required`. Known gap: triage retries are not capped (ROADMAP step 0.3).
+`gmail_notification_jobs`: `pending → processing → succeeded`. After `GMAIL_NOTIFICATION_MAX_ATTEMPTS` (default 5) a job returns to `pending` and the mailbox enters a bounded resync; a job reaches `dead_letter` only when that resync hits its cap (`GMAIL_RESYNC_MAX_MESSAGES`, default 100), the mailbox state is missing, or a worker dead-letters it. `gmail_triage_work`: `processing → succeeded | noop | dead_letter`. Both use leases (the job lease is 120 seconds) and `next_attempt_at` for backoff. Tasks that find nothing during reconcile stay `reconciliation_required`. Known gap: triage retries are not capped (TASKS 0.3).
 
 ## 10. Security architecture
 
@@ -354,7 +354,7 @@ flowchart LR
   mail --> triage --> validate --> approve --> ledger --> providers[(Providers)]
 ```
 
-The model that reads untrusted content has **no tools** [BUILT for triage]. Plain code turning its output into proposals is [PLANNED]. A person approves, and the ledger executes agent-initiated writes; the REST mail endpoints in §4 still write directly until ROADMAP step 0.6. Details, breach scenarios and controls: [THREAT_MODEL.md](THREAT_MODEL.md).
+The model that reads untrusted content has **no tools** [BUILT for triage]. Plain code turning its output into proposals is [PLANNED]. A person approves, and the ledger executes agent-initiated writes; the REST mail endpoints in §4 still write directly until TASKS 0.6. Details, breach scenarios and controls: [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## 11. Reliability and failure modes
 
@@ -366,7 +366,7 @@ The model that reads untrusted content has **no tools** [BUILT for triage]. Plai
 | Two workers, same message | Lease plus unique `(mailbox, message)` row |
 | Gemini unavailable or slow | Triage work released with backoff; interactive call returns a provider error |
 | Redis down | Cache treated as miss; OAuth state flow fails closed |
-| Retention cleanup raises | Today the loop survives (it logs and retries), but cleanup runs before the heartbeat, watch renewal and job claim, so a persistent failure claims no work and `/readyz` reports the worker stale (ROADMAP 0.2). Target: cleanup isolated from the loop |
+| Retention cleanup raises | Today the loop survives (it logs and retries), but cleanup runs before the heartbeat, watch renewal and job claim, so a persistent failure claims no work and `/readyz` reports the worker stale (TASKS 0.2). Target: cleanup isolated from the loop |
 | Gmail watch expires | Renewed by worker; resync on stale history id |
 
 ## 12. Capacity and cost estimate
@@ -406,4 +406,4 @@ All figures are [ESTIMATE] unless a source is named; assumptions are stated so t
 
 ## 15. Open design questions
 
-See [PRD.md §9](PRD.md#9-open-questions) and the spikes in [ROADMAP.md](ROADMAP.md).
+See [PRD.md §9](PRD.md#9-open-questions) and the spikes in [TASKS.md](TASKS.md) (2.1 and 5.0).

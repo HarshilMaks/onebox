@@ -29,4 +29,4 @@ Provider behavior to design around: Microsoft does not revoke old refresh tokens
 
 1. [ ] Backfill and drop the legacy plaintext column.
 2. [ ] Canary test: tokens never appear in logs or prompts.
-3. [ ] Real revoke on disconnect (ROADMAP 2.4).
+3. [ ] Real revoke on disconnect (TASKS 2.4).

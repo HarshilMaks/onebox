@@ -73,7 +73,7 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 ## 7. Known gaps in the code today
 
 - **No user login.** JWTs are expected from an external issuer that does not exist; OAuth start needs one.
-- **Reply recipient resolution prefers `Reply-To`.** `resolve_reply_target` (in `server/services/pending_actions.py`) currently favors the `Reply-To` header over the verified `From`; ROADMAP step 3.2 and invariant 8 change this, and the first failing test will exercise the real behavior.
+- **Reply recipient resolution prefers `Reply-To`.** `resolve_reply_target` (in `server/services/pending_actions.py`) currently favors the `Reply-To` header over the verified `From`; TASKS 3.2 and invariant 8 change this, and the first failing test will exercise the real behavior.
 - **No disconnect or revoke endpoint** that I have seen; verify.
 - **No rate limiting.**
 - **Ledger bypasses:** every REST mail write: `DELETE /mail/emails/{id}` (the only reason for the broad `https://mail.google.com/` scope), `POST /mail/send`, `POST /mail/drafts`, read, unread, star, trash and restore. The assistant's `create_draft` and `mark_as_read` also act immediately.

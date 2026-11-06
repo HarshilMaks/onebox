@@ -26,5 +26,5 @@ Easier: a clear, testable claim ("the AI cannot send"). Harder: needs a review s
 
 ## Action items
 
-1. [ ] Route or remove REST send, delete and trash (ROADMAP 0.6).
+1. [ ] Route or remove REST send, delete and trash (TASKS 0.6).
 2. [ ] Test invariant 1: no external write without an approved action.

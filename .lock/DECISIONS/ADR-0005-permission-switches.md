@@ -27,4 +27,4 @@ Spike required: Google's `include_granted_scopes` may merge earlier grants, whic
 ## Action items
 
 1. [ ] Policy tests: Off blocks every token use; Read blocks proposals.
-2. [ ] Close the `include_granted_scopes` spike (ROADMAP 2.1).
+2. [ ] Close the `include_granted_scopes` spike (TASKS 2.1).

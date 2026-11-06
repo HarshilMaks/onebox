@@ -8,20 +8,21 @@
 - **Verified on 2026-11-05 at that baseline:** lint clean; OpenAPI drift check passes (34 paths); one Alembic head with no schema drift; **246 tests pass** (unit plus integration on real PostgreSQL); the API boots and answers `/livez`, `/readyz`, `/actions` (401 without a token) and `/mail/triage`.
 - **Built:** the approval ledger and its states; Gmail, Calendar and Tasks writes with deterministic IDs and markers; reconciliation; Pub/Sub push, notification jobs with leases, triage with zero tools; encrypted credential storage; list endpoints; CI.
 - **Not built:** sign-in and sessions, connections and switches, email-to-proposals bridge, web client, Outlook, demo mode, deploy, rate limits, disconnect.
-- **Decisions are locked in** [DECISIONS/](DECISIONS/). The plan is [ROADMAP.md](ROADMAP.md). The next step is Phase 0, step 0.1.
+- **Decisions are locked in** [DECISIONS/](DECISIONS/). The plan is [ROADMAP.md](ROADMAP.md) (phases and totals) and [TASKS.md](TASKS.md) (every task). The next task is 0.1.
 
 ## 2. Resume prompt (full version)
 
 ```
 Resume the OneBox project (Python 3.12, FastAPI async, PostgreSQL via SQLAlchemy async + Alembic,
 Redis, Gemini on Vertex AI, Google OAuth and Pub/Sub). Read .lock/README.md, then .lock/PRD.md,
-.lock/ARCHITECTURE.md, .lock/ROADMAP.md and the ADRs in .lock/DECISIONS/ before changing anything.
+.lock/ARCHITECTURE.md, .lock/ROADMAP.md, .lock/TASKS.md, .lock/AGENT_GUIDE.md and the ADRs in
+.lock/DECISIONS/ before changing anything.
 
-Task: execute ROADMAP Phase 0 starting at step 0.1, one commit per step. Minor steps commit directly
-on main; major steps go on a new branch with a plain name (feat/, fix/, refactor/, docs/ or chore/
-prefix, never claude/), as set out in .lock/ENGINEERING_PRACTICES.md section 3 and the "Where each
-step lands" table in .lock/ROADMAP.md.
-Workflow per step: state the step and its exit criteria in one line; write the failing test first
+Task: execute TASKS Phase 0 in the listed order starting at task 0.1, using the commit plan under each task. Minor tasks commit directly
+on main; major tasks go on a new branch with a plain name (feat/, fix/, refactor/, docs/ or chore/
+prefix, never claude/), as set out in .lock/ENGINEERING_PRACTICES.md section 3 and the "Lands"
+column of .lock/TASKS.md.
+Workflow per task: state the task and its done-when in one line; write the failing test first
 and run it to confirm it fails for the intended reason (RED); implement the smallest fix to GREEN;
 refactor with tests green; run lint, the OpenAPI drift check, migrations check and the full suite;
 review the diff (and security-review anything touching auth, tokens or external writes); commit
@@ -41,7 +42,7 @@ implementation.
 ## 3. Resume prompt (quick version)
 
 ```
-Read .lock/ROADMAP.md. Do Phase 0 step by step: failing test first, minimal fix, refactor,
+Read .lock/TASKS.md. Do Phase 0 task by task, in the listed order: failing test first, minimal fix, refactor,
 lint + OpenAPI check + full suite, conventional commit. Minor on main, major on a plain branch
 (never claude/). No push without approval.
 ```
