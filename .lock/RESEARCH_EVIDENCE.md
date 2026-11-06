@@ -65,10 +65,10 @@ This file traces each locked OneBox decision to claims, sources and a confidence
 - Gmail read, modify, compose and metadata scopes are restricted; `gmail.send` is sensitive ([scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)) [primary]. Calendar is sensitive per Google's example. Tasks is not on the restricted list ([list](https://support.google.com/cloud/answer/13464325)) [primary]; its tier is unstated, and one third-party doc says sensitive [secondary].
 - Restricted data on a server needs verification plus a security assessment every 12 months ([Google](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)) [primary]. Sensitive review is officially up to 10 days; forums say 5 to 7 weeks [anecdote].
 - Testing mode: 100 test users, 7-day authorisation expiry. Refresh tokens also die after six months unused, on password change with Gmail scopes, or beyond 100 per account per client ([Google](https://developers.google.com/identity/protocols/oauth2)) [primary].
-- Gmail quota: 6,000 units per minute per user; `messages.send` and `watch` cost 100, `history.list` 2 ([quota](https://developers.google.com/workspace/gmail/api/reference/quota)) [primary]. Daily send limits, Calendar quotas and Tasks quotas were not researched.
+- Gmail quota: 6,000 units per minute per user; `messages.send` and `watch` cost 100, `history.list` 2 ([quota](https://developers.google.com/workspace/gmail/api/reference/quota)) [primary]. Daily send limits and Calendar and Tasks quotas appear only in §9.1 and are unverified.
 - Pub/Sub watch: renew at least every 7 days; one notification per second per user; a `history.list` 404 means full resync ([push](https://developers.google.com/workspace/gmail/api/guides/push), [sync](https://developers.google.com/workspace/gmail/api/guides/sync)) [primary].
 
-**Microsoft Graph.** Access tokens last 60 to 90 minutes; refresh tokens default to 90 days; a user's password change leaves a confidential client's token alive ([Entra](https://learn.microsoft.com/en-us/entra/identity-platform/configurable-token-lifetimes), [refresh tokens](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)) [vendor-doc]. `revokeSignInSessions` revokes every app's tokens and does not support personal accounts ([Graph](https://learn.microsoft.com/en-us/graph/api/user-revokesigninsessions?view=graph-rest-1.0)) [vendor-doc]. Throttling limits were not researched.
+**Microsoft Graph.** Access tokens last 60 to 90 minutes; refresh tokens default to 90 days; a user's password change leaves a confidential client's token alive ([Entra](https://learn.microsoft.com/en-us/entra/identity-platform/configurable-token-lifetimes), [refresh tokens](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)) [vendor-doc]. `revokeSignInSessions` revokes every app's tokens and does not support personal accounts ([Graph](https://learn.microsoft.com/en-us/graph/api/user-revokesigninsessions?view=graph-rest-1.0)) [vendor-doc]. Throttling limits appear only in §9.1 and are unverified.
 
 **Gemini on Vertex (page updated 2026-11-02).**
 - Retired 2026-10-20: `gemini-2.5-flash`, `-flash-lite`, `-pro`. `gemini-3.5-flash-lite` retires no earlier than 2027-07-21; `gemini-3.8-flash` no earlier than 2027-09-02; `gemini-3.6-flash` on 2026-11-19 ([lifecycle](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)) [primary]. The 2026-12-01 date is Developer API only ([deprecations](https://ai.google.dev/gemini-api/docs/deprecations)) [primary]. Serving after retirement was not tested [unverified].
@@ -76,7 +76,7 @@ This file traces each locked OneBox decision to claims, sources and a confidence
 
 ## 6. Hiring-market context (for the resume goal only)
 
-This informs how to present the project; it is not evidence for any product decision, and the count is a convenience sample.
+This informs how to present the project; it is not evidence for any product decision, and both counts (this one and the larger one in §9.2, which supersedes it for sample size) are convenience samples.
 
 **Method (own-count, 2026-11-03).** Public job-board APIs (Greenhouse, Ashby, Lever) for 40 companies ([example](https://boards-api.greenhouse.io/v1/boards/databricks/jobs?content=true)). Titles needed AI, ML, LLM, agent or generative plus engineer or developer; research, manager, solutions and similar roles were excluded; duplicates removed per company. n = 358; regex-based, not hand-audited; biased toward AI-native firms.
 
@@ -141,3 +141,15 @@ This informs how to present the project; it is not evidence for any product deci
 - **Consolidation.** Clockwise shut down on 2026-03-27 after Salesforce hired its team; Reclaim was bought by Dropbox; Grammarly bought Superhuman (2025); Notion Mail shut down on 2026-09-22; Gmail made Gemini features free in January 2026.
 - **Privacy.** Every product checked says it does not train on user data; Fyxer and Superhuman say their model providers retain nothing (secondary). Provider-side retention: OpenAI keeps abuse logs up to 30 days by default; Azure's abuse-monitoring store can include human review unless an opt-out is approved; Vertex may log prompts for abuse monitoring and its in-memory cache lasts up to 24 hours; Anthropic zero retention is per organization and sales-gated. The honest claim is minimal retention plus a verifiable log, not "zero retention".
 - **Demand.** No survey on multi-provider demand was found. One opt-in survey (n=1,000, August 2026): 25% would let AI manage their calendar and 46% cite privacy as a main worry.
+- **Tool sprawl.** Asana's long-running Anatomy of Work index reports roughly 60% of the workday spent on coordination; the figure is survey-based and its wording varies between editions [secondary; found by search, page not re-read].
+
+## 10. Spike results
+
+One row per spike (ROADMAP task 2.1 and others), added when the spike is run. Never include tokens, addresses or mail content.
+
+| Date | Question | Result | Commit |
+|---|---|---|---|
+| — | Does Gmail preserve a client-set Message-ID on send? | not run | — |
+| — | Does `include_granted_scopes` defeat read and propose scope tiering? | not run | — |
+| — | Which tier is the Google Tasks scope? | not run | — |
+| — | Is a Sent Items lookup reliable for Outlook reconciliation? | not run | — |

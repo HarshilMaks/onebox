@@ -28,6 +28,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 
 - **[BUILT]** verified in the code at the baseline commit.
 - **[PLANNED]** decided, not built.
+- **[DOCUMENT]** accepted and described, not built.
 - **[OPEN]** not decided yet; listed in the PRD's open questions.
 - **[ESTIMATE]** a judgment or arithmetic, not a measurement.
 - **[UNVERIFIED]** the source was secondary or could not be read.
@@ -38,7 +39,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 2. **Repo-relative paths only.**
 3. **A locked decision changes only through a new ADR** that supersedes the old one.
 4. **Claims about the outside world cite a source** in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) with a confidence tag, or are marked [UNVERIFIED].
-5. **Docs change in the same pull request as the behavior they describe.**
+5. **Docs change in the same change (commit or branch) as the behavior they describe.**
 6. **Honest claims only.** Never write "exactly once", "zero retention", "cannot be tricked" or "agentic" without a tool loop. See [THREAT_MODEL.md](THREAT_MODEL.md) for the allowed wording.
 
 ## Glossary

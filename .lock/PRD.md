@@ -13,7 +13,7 @@ Details and confidence tags are in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md).
 
 - **Tool sprawl is real, but the numbers are soft.** A vendor survey series reports about 60% of the workday on coordination; the figure is survey-based and its wording varies between editions. [secondary]
 - **What users complain about in AI inbox tools** (71 low-star Trustpilot reviews, small and self-selected): actions nobody approved and false "done" claims; most other complaints were billing. [anecdote]
-- **Attackers steer assistants through content.** Documented incidents include EchoLeak (M365 Copilot), the Superhuman AI exfiltration, the Atlassian MCP proof of concept, Notion agent exfiltration, the Asana MCP exposure, and the Composio breach. [primary/discloser]
+- **Attackers steer assistants through content.** Documented incidents include EchoLeak (M365 Copilot), the Superhuman AI exfiltration, the Atlassian MCP proof of concept and Notion agent exfiltration. Platform-security incidents also occurred: the Asana MCP tenant-isolation bug and the Composio token theft. [primary/discloser]
 - **Competitors' approval models are weak or undocumented.** Zapier Agents' approval is an instruction in the prompt; no platform checked documents approval expiry; no page read documents a persistent cross-app approval queue or per-action audit. [vendor-doc; absence in documentation is an inference]
 - **Assumption — needs validation via beta users:** people prefer a stored review queue to per-call chat prompts.
 
@@ -30,7 +30,7 @@ We will know we are right when the success metrics in §6 hold on real test acco
 
 ## 5. Product in one screen
 
-A person signs in with Google, adds apps with **"+"**, and sets each app to **Off / Read / Propose**. New mail produces a short **digest** and **suggestions** (reply, event, task). Each suggestion shows the exact recipient or time, a link to the source mail, and a conflict warning. The person edits, approves or rejects. Approving runs it once. An **activity timeline** shows everything. **Disconnect** revokes access and deletes the stored data.
+A person signs in with Google, adds apps with **"+"**, and sets each app to **Off / Read / Propose**. New mail produces a short **digest** and **suggestions** (reply, event, task). Each suggestion shows the exact recipient or time, a link to the source mail, and a conflict warning. The person edits, approves or rejects. Approving runs it at most once. An **activity timeline** shows everything. **Disconnect** revokes access and deletes the stored data.
 
 **Design principles:** the AI never acts · one queue · least privilege · honest status · nothing happens twice · plain text only.
 
@@ -74,7 +74,7 @@ Already built and kept: drafts and mark-as-read run immediately; send, reply, ev
 |---|---|
 | **Security** | Approval is enforced in code, single-use, bound to the exact payload, with an expiry. Least-privilege scopes. Model output rendered as plain text. Untrusted content never reaches a model that has tools. See [THREAT_MODEL.md](THREAT_MODEL.md). |
 | **Reliability** | At-most-once dispatch; unknown outcomes are reconciled, never auto-retried; a failing background step must not stop the worker. |
-| **Privacy** | No passwords, no chat memory. OneBox stores only encrypted tokens, proposals, summaries and audit events, and a button deletes them. The honest claim is minimal retention, not "zero retention". |
+| **Privacy** | No passwords, no chat memory. OneBox stores encrypted tokens plus proposals, summaries and audit events in plain text with a retention limit (defaults: proposals 30 days, jobs and triage work 14 days), and caches parsed mail in Redis for up to 5 minutes. A delete-my-data action is planned (FR-10). The honest claim is minimal retention, not "zero retention". |
 | **Performance and cost** | Budgets in [ARCHITECTURE.md §12](ARCHITECTURE.md#12-capacity-and-cost-estimate). A per-user daily cap on model calls and proposals. |
 | **Operability** | Health endpoints, structured logs with a correlation id, alerts on stuck work. |
 | **Demo scale** | At most 100 allowlisted users (Google Testing mode); weekly re-consent. |

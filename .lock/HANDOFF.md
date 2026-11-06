@@ -4,7 +4,7 @@
 
 ## 1. Where we are
 
-- **Code baseline:** commit `55b6dbd` (same code as `origin/main` at `4599ff1`).
+- **Code baseline:** the code is unchanged since commit `4599ff1` (the PR #6 merge, identical to `55b6dbd`); later commits touch only `.gitignore` and `.lock/`.
 - **Verified on 2026-11-05 at that baseline:** lint clean; OpenAPI drift check passes (34 paths); one Alembic head with no schema drift; **246 tests pass** (unit plus integration on real PostgreSQL); the API boots and answers `/livez`, `/readyz`, `/actions` (401 without a token) and `/mail/triage`.
 - **Built:** the approval ledger and its states; Gmail, Calendar and Tasks writes with deterministic IDs and markers; reconciliation; Pub/Sub push, notification jobs with leases, triage with zero tools; encrypted credential storage; list endpoints; CI.
 - **Not built:** sign-in and sessions, connections and switches, email-to-proposals bridge, web client, Outlook, demo mode, deploy, rate limits, disconnect.
@@ -49,8 +49,8 @@ lint + OpenAPI check + full suite, conventional commit. Minor on main, major on 
 ## 4. Environment traps
 
 - Minor work happens on `main`, major work on a branch (see ENGINEERING_PRACTICES section 3). Before starting, confirm `main` is up to date with `origin/main` and the working tree is clean. Prefer the main checkout over an auto-created worktree, whose branch name would start with `claude/`.
-- Integration tests need a throwaway PostgreSQL and Redis; the required environment variable **names** are in `.github/workflows/backend.yml` and `.env.example`. Never commit values.
-- **Integration tests that need PostgreSQL skip silently when it is unreachable** (about 41 of them). Confirm they actually ran before trusting a green result.
+- Tests need a throwaway PostgreSQL (not Redis); the required environment variable **names** are in `.github/workflows/backend.yml` and `.env.example`. Never commit values.
+- **Integration tests that need PostgreSQL skip silently when it is unreachable** (44 collected tests: without a database a run shows 202 passed and 44 skipped). Confirm they actually ran before trusting a green result.
 - CI has a PostgreSQL service but no Redis service, and no coverage or dependency-scanning tooling.
 - Local automation hooks may ask for stated facts before the first shell command or new file; state them and retry.
 - Run databases in disposable containers and remove them afterwards.
@@ -64,7 +64,7 @@ lint + OpenAPI check + full suite, conventional commit. Minor on main, major on 
 
 ## 6. Working agreements
 
-- Docs in `.lock/` change in the same pull request as the behavior they describe.
+- Docs in `.lock/` change in the same change (commit or branch) as the behavior they describe.
 - A locked decision changes only through a new ADR.
 - Claims follow [THREAT_MODEL.md](THREAT_MODEL.md) §8.
 - Evidence lives in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md); anything not there is marked unverified.
