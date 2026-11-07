@@ -372,17 +372,17 @@ The model that reads untrusted content has **no tools** [BUILT for triage]. Plai
 
 ## 12. Capacity and cost estimate
 
-All figures are [ESTIMATE] unless a source is named; assumptions are stated so they can be checked.
+All figures are [ESTIMATE] unless a source is named; assumptions are stated so they can be checked. Quotas and prices below were re-checked against the vendors' own pages on 2026-11-07 ([RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §5 and §9.1).
 
 - **Demo scale:** at most 100 allowlisted users (Google Testing-mode cap, official docs).
 - **Mail volume:** assume 5–10 active users × 50 mails/day ≈ 250–500 mails/day ≈ well under 1 mail/s even at 10× peak.
-- **Model cost:** assume about 4,000 input and 300 output tokens per triage call. At Flash-Lite prices of $0.30 and $2.50 per million tokens (Gemini Developer API page; Vertex parity unverified) that is about **$2 per 1,000 mails**, so roughly **$1 per day** at 500 mails/day. A per-user daily cap bounds the worst case.
-- **Gmail quota (official):** 6,000 units per minute per user; `messages.send` costs 100 units; consumer accounts block above about 500 sent emails per day. Not a constraint at demo scale.
+- **Model cost:** assume about 4,000 input and 300 output tokens per triage call. The configured model, `gemini-3.5-flash-lite`, costs $0.30 and $2.50 per million input and output tokens on Vertex's global endpoint and $0.33 and $2.75 on regional endpoints such as `us-central1`, which `.env.example` uses (Vertex pricing page, checked 2026-11-07). That is **$1.95 to $2.15 per 1,000 mails** (thinking tokens, if any, bill as output), so roughly **$1 per day** at 500 mails/day. A per-user daily cap bounds the worst case.
+- **Gmail quota (official):** 6,000 units per minute per user; `messages.send` costs 100 units; consumer accounts are blocked for 1 to 24 hours after more than 500 recipients in one email or more than 500 emails in a day (Google does not say whether API sends count). Not a constraint at demo scale.
 - **Calendar:** 600 requests per minute per user. **Tasks:** 50,000 requests per day. **Graph (Outlook):** 10,000 requests per 10 minutes per mailbox, 4 concurrent.
 - **Gmail push:** at most 1 notification per second per user; `watch` must be renewed at least every 7 days (daily recommended).
 - **Automation fairness [PLANNED, TASKS 2.5]:** a job covers at most 10 messages and renews its lease per message (today a job holds a 120-second lease and up to 100 messages); work is scheduled round-robin across connections so one flood cannot starve the rest; push for a disconnected mailbox returns 2xx and queues a resync, so Pub/Sub does not retry forever.
 - **Cost and rate caps [PLANNED, TASKS 6.3]:** per-user counters live in Postgres and fail closed to a visible `deferred` state, so an exhausted cap never silently drops mail or advances the cursor.
-- **Hosting:** a single VM at roughly $6–12 per month, about $21 with managed Postgres (third-party prices).
+- **Hosting:** a single VM at $6 (1 GiB) or $12 (2 GiB) per month, plus managed PostgreSQL from about $15 per month, so about $21 with the small VM and about $27 with the larger (one provider's own price pages, checked 2026-11-07).
 
 ## 13. Observability
 

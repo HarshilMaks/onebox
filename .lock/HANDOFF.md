@@ -59,7 +59,7 @@ lint + OpenAPI check + full suite, conventional commit. Minor on main, major on 
 
 ## 5. Doc debt (do early)
 
-- [ ] **Re-fetch the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9** (provider quotas, the 16,501-posting hiring count, prior-art licenses, platform-risk and privacy claims). The original notes were lost and §9 is marked unverified; `ARCHITECTURE.md` §12 depends on the quotas.
+- [ ] **Finish re-fetching the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9.** Done on 2026-11-07: provider limits, platform costs and model prices (§9.1, part of §9.4, `ARCHITECTURE.md` §12). Still unverified: the 16,501-posting hiring count (§9.2), prior-art licenses (§9.3), and the consolidation, privacy and demand claims (§9.4).
 - [ ] Render the Mermaid diagrams on a GitHub preview and fix any syntax errors; they were not rendered locally.
 - [ ] Run the commands in `ENGINEERING_PRACTICES.md` once; they were derived from the repo files, not executed.
 

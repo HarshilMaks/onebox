@@ -128,7 +128,7 @@ Order: 4.0, 4.5, 4.1, 4.2, 4.3, then 4.4 only if 4.5 shows approval fatigue. The
 
 ## Phase 5 — Outlook connector · branch `feat/outlook-connector` (MS3, stretch)
 
-Start only after Phase 6 is done or the owner decides to trade the demo polish for breadth. Tasks marked XL **must be split into capability tasks of L or smaller before they start**; the commit plan is written at that point.
+Start only after Phase 6 is done or the owner decides to trade the demo polish for breadth. Tasks marked XL **must be split into capability tasks of L or smaller before they start**; the commit plan is written at that point. Registering the Microsoft app needs an Entra tenant (a free Azure account creates one), and personal Microsoft accounts are a supported sign-in audience for it, not a way to register it ([RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9.1); spike 5.0 confirms that personal outlook.com accounts can sign in.
 
 | ID | Task | Needs | Lands · size | Status |
 |---|---|---|---|---|
@@ -155,7 +155,7 @@ Start only after Phase 6 is done or the owner decides to trade the demo polish f
 
 | ID | Task | Status |
 |---|---|---|
-| X.1 | Re-fetch the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9 | todo |
+| X.1 | Re-fetch the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9. Provider limits, platform costs and model prices were done on 2026-11-07; the hiring count, prior art, privacy and demand claims remain | doing |
 | X.2 | Render the Mermaid diagrams on GitHub and fix syntax errors | todo |
 | X.3 | Run the commands in [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) once and correct them | todo |
 | X.4 | Decide the simplification candidates below | todo |
