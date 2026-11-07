@@ -5,16 +5,19 @@ How changes are made in this repository. Everything below is read from the tree.
 ## 1. Run locally
 
 ```bash
-make install && source .venv/bin/activate   # pip install --require-hashes -r requirements-dev.txt
+make install && source .venv/bin/activate   # needs python3.12 on PATH (or make install PYTHON=...); pip install --require-hashes -r requirements-dev.txt
 cp .env.example .env                        # fill the placeholders; .env is gitignored
-bash scripts/redis_setup.sh                 # starts Redis through Docker Compose
-alembic upgrade head
+docker run -d --name onebox-dev-pg -p 127.0.0.1:5432:5432 -e POSTGRES_DB=onebox -e POSTGRES_USER=onebox \
+  -e POSTGRES_PASSWORD=<throwaway-password> postgres:16.6-alpine      # Compose's own Postgres and Redis publish no host port
+until docker exec onebox-dev-pg pg_isready -U onebox -d onebox; do sleep 1; done
+docker run -d --name onebox-dev-redis -p 127.0.0.1:6379:6379 redis:7.4.2-alpine   # tag as in docker-compose.yaml
+alembic upgrade head                        # reads .env; point DATABASE_URL at the container
 make run-dev                                # API on port 8000, docs at /docs
 make run-worker                             # automation worker; needs the automation settings
 make check                                  # ruff, OpenAPI drift check, pytest
 ```
 
-Required variable names (set in `.env`, never committed): `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL`, `CORS_ALLOWED_ORIGINS`. Add `OAUTH_TOKEN_KEYRING_PATH` plus `OAUTH_TOKEN_ACTIVE_KEY_ID` (a pair; credential work fails closed without both). `PENDING_ACTION_OPERATOR_IDS` is needed for the operator-only reconcile endpoint. `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `ALGORITHM` and `CORS_ALLOWED_ORIGINS` have defaults in `server/config.py`. The worker also needs `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL`. Compose adds `POSTGRES_PASSWORD` and the `*_HOST_PATH` mount variables. The test suite imports settings, so these must be exported even for `pytest`.
+Required variable names (set in `.env`, never committed): `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`, `GOOGLE_OAUTH_CLIENT_SECRETS`, `OAUTH_REDIRECT_URI`, `FRONTEND_OAUTH_CALLBACK_URI`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `GOOGLE_MODEL`, `CORS_ALLOWED_ORIGINS`. Add `OAUTH_TOKEN_KEYRING_PATH` plus `OAUTH_TOKEN_ACTIVE_KEY_ID` (a pair; credential work fails closed without both). `PENDING_ACTION_OPERATOR_IDS` is needed for the operator-only reconcile endpoint. `ENVIRONMENT`, `SERVICE_ROLE`, `AUTOMATION_ENABLED`, `ALGORITHM` and `CORS_ALLOWED_ORIGINS` have defaults in `server/config.py`. The worker also needs `AUTOMATION_OWNER_ID`, `PUBSUB_TOPIC`, `PUBSUB_SUBSCRIPTION`, `PUBSUB_PUSH_AUDIENCE`, `PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL`. **Tests:** only `DATABASE_URL` must be exported in the shell, because the integration fixtures read `os.environ["DATABASE_URL"]`; without it a run shows 1 failure and 43 errors, not skips. The other settings may live in `.env`. **Compose** is stricter: `docker compose config -q` fails unless these twelve are exported in the shell: `POSTGRES_PASSWORD`, `SECRET_KEY`, `OAUTH_TOKEN_ACTIVE_KEY_ID`, `GOOGLE_PROJECT_ID`, `AUTOMATION_OWNER_ID`, the four `PUBSUB_*` names above, and `GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH`, `GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH` and `OAUTH_TOKEN_KEYRING_HOST_PATH`. Never put `POSTGRES_PASSWORD` in `.env`: the settings reject unknown names, so the API will not start. Verified by running the commands on 2026-11-07; the worker was not started.
 
 ## 2. CI pipeline
 
@@ -22,7 +25,7 @@ Required variable names (set in `.env`, never committed): `ENVIRONMENT`, `SERVIC
 
 | Job | What it checks |
 | --- | --- |
-| `quality` | Installs `requirements-dev.txt` with `--require-hashes`; `pip-compile --dry-run` on both `.in` files (inputs resolve; it does not diff the committed locks); `ruff check .`; `python scripts/generate_openapi.py --check`; `compileall`; `alembic upgrade head` then `alembic check` (model drift) against a PostgreSQL 16.6 service; `pytest -q`; `alembic heads` and `alembic history --verbose`; `docker compose config -q`. |
+| `quality` | Installs `requirements-dev.txt` with `--require-hashes`; `pip-compile --dry-run` on both `.in` files (inputs resolve; it does not diff the committed locks); `ruff check .`; `python scripts/generate_openapi.py --check`; `compileall`; `alembic upgrade head` then `alembic check` (model drift) against a PostgreSQL 16.6 service; `pytest -q` (CI exports `PYTHONPATH`; locally use `python -m pytest -q`); `alembic heads` and `alembic history --verbose`; `docker compose config -q`. |
 | `image` | `docker build --no-cache`, then asserts the container is non-root and holds no `.env`, `.git`, `.agents`, `tests`, or `*.json` file. Same as `make image-smoke`. |
 | `secrets` | `gitleaks/gitleaks-action@v2` over full git history. |
 

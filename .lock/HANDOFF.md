@@ -51,7 +51,7 @@ lint + OpenAPI check + full suite, conventional commit. Minor on main, major on 
 
 - Minor work happens on `main`, major work on a branch (see ENGINEERING_PRACTICES section 3). Before starting, confirm `main` is up to date with `origin/main` and the working tree is clean. Prefer the main checkout over an auto-created worktree, whose branch name would start with `claude/`.
 - Tests need a throwaway PostgreSQL (not Redis); the required environment variable **names** are in `.github/workflows/backend.yml` and `.env.example`. Never commit values.
-- **Integration tests that need PostgreSQL skip silently when it is unreachable** (44 collected tests: without a database a run shows 202 passed and 44 skipped). Confirm they actually ran before trusting a green result.
+- **Integration tests that need PostgreSQL skip silently when it is unreachable** (44 collected tests: with `DATABASE_URL` exported but no database, a run shows 202 passed and 44 skipped; with it unset they fail with a `KeyError`). Confirm they actually ran before trusting a green result.
 - CI has a PostgreSQL service but no Redis service, and no coverage or dependency-scanning tooling.
 - Local automation hooks may ask for stated facts before the first shell command or new file; state them and retry.
 - Run databases in disposable containers and remove them afterwards.
@@ -61,7 +61,7 @@ lint + OpenAPI check + full suite, conventional commit. Minor on main, major on 
 
 - [ ] **Finish re-fetching the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9.** Done on 2026-11-07: provider limits, platform costs and model prices (§9.1, part of §9.4, `ARCHITECTURE.md` §12). Still unverified: the 16,501-posting hiring count (§9.2), prior-art licenses (§9.3), and the consolidation, privacy and demand claims (§9.4).
 - [ ] Render the Mermaid diagrams on a GitHub preview and fix any syntax errors; they were not rendered locally.
-- [ ] Run the commands in `ENGINEERING_PRACTICES.md` once; they were derived from the repo files, not executed.
+- [x] Run the commands in `ENGINEERING_PRACTICES.md` once. Done on 2026-11-07 and corrected (database and Redis startup, `PYTHONPATH`, the Compose variables). Not run: the worker, `pip-compile` and gitleaks, which need real settings or the network.
 
 ## 6. Working agreements
 

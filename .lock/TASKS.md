@@ -157,7 +157,7 @@ Start only after Phase 6 is done or the owner decides to trade the demo polish f
 |---|---|---|
 | X.1 | Re-fetch the sources behind [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §9. Provider limits, platform costs and model prices were done on 2026-11-07; the hiring count, prior art, privacy and demand claims remain | doing |
 | X.2 | Render the Mermaid diagrams on GitHub and fix syntax errors | todo |
-| X.3 | Run the commands in [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) once and correct them | todo |
+| X.3 | Run the commands in [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) once and correct them (done 2026-11-07, except the worker, `pip-compile` and gitleaks) | done |
 | X.4 | Decide the simplification candidates below | todo |
 
 ### X.4 Simplification candidates (decide before the phase that needs them)

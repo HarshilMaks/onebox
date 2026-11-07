@@ -1,20 +1,20 @@
 # Test strategy
 
-Counts below come from reading `tests/`, not from a test run. Test-function counts are approximate: `pytest` collects more cases because of 17 `parametrize` markers.
+The pass counts (246 with a database; 202 passed and 44 skipped without) come from a run on 2026-11-07 at commit `1f172d7`. The per-layer function counts come from reading `tests/` and are approximate: `pytest` collects more cases because of 17 `parametrize` markers.
 
 ## 1. The pyramid today
 
 | Layer | Location | Approx. size | Needs |
 | --- | --- | --- | --- |
 | Unit | `tests/unit/` (21 files) | about 145 test functions | nothing external; hand-written fakes |
-| Integration | `tests/integration/` (4 files plus `conftest.py`) | about 50 test functions; 44 collected tests need PostgreSQL (without one a run shows 202 passed and 44 skipped) | a real PostgreSQL server |
+| Integration | `tests/integration/` (4 files plus `conftest.py`) | about 50 test functions; 44 collected tests need PostgreSQL (with `DATABASE_URL` exported but no database reachable, a run shows 202 passed and 44 skipped; with it unset, 1 failed and 43 errors) | a real PostgreSQL server |
 | End to end or live provider | not present | 0 | n/a |
 
 `tests/unit/test_api_contract.py` is a contract layer inside the unit tests: it compares `docs/openapi.json` and `frontend-client-types.ts` with the live app.
 
 Integration tests run against real PostgreSQL, not SQLite. The `pending_db` fixture (`tests/integration/conftest.py`) creates a throwaway database per test, builds tables with `Base.metadata.create_all`, points the services at it, and drops it afterwards; `notification_db` in `test_notification_jobs.py` does the same. `test_pending_action_migration.py` runs real Alembic upgrade, a data check, and downgrade. The database user needs `CREATEDB`.
 
-Warning: these fixtures call `pytest.skip` when PostgreSQL is unreachable. A green run without a database silently skips them. Read the `-ra` summary (set in `pyproject.toml`) for "disposable PostgreSQL database is unavailable".
+Warning: these fixtures call `pytest.skip` when PostgreSQL is unreachable. A green run without a database silently skips them. They read `os.environ["DATABASE_URL"]`, so with that variable unset they fail instead of skipping. Read the `-ra` summary (set in `pyproject.toml`) for "disposable PostgreSQL database is unavailable".
 
 ## 2. Fake providers
 
@@ -84,20 +84,22 @@ CI uses only a PostgreSQL service. Redis is not needed for tests, only to run th
 docker run --rm -d --name onebox-test-pg -p 5432:5432 \
   -e POSTGRES_DB=onebox -e POSTGRES_USER=onebox -e POSTGRES_PASSWORD=<throwaway-password> \
   postgres:16.6-alpine          # image and variables mirror the CI service block
-make install && source .venv/bin/activate
-# export the variable names listed in .github/workflows/backend.yml (env block),
+until docker exec onebox-test-pg pg_isready -U onebox -d onebox; do sleep 1; done   # alembic fails if run too early
+make install && source .venv/bin/activate   # needs python3.12 on PATH
+# export the variable names listed in .github/workflows/backend.yml (env block), including
+# PYTHONPATH and the Compose variables that `docker compose config -q` needs,
 # with DATABASE_URL pointing at the container above
 ruff check .
 python scripts/generate_openapi.py --check
 python -m compileall server tools clients agents.py scripts/generate_openapi.py
 alembic upgrade head && alembic check
-pytest -q
+python -m pytest -q             # bare `pytest -q` needs PYTHONPATH exported, as CI does
 alembic heads && alembic history --verbose
 docker compose config -q
 docker stop onebox-test-pg
 ```
 
-For a running app, `bash scripts/redis_setup.sh` starts Redis through Compose (Redis image tag: see `docker-compose.yaml`). The shortcut `make check` runs lint, contract check, and tests only.
+For a running app, `bash scripts/redis_setup.sh` starts Redis only on Compose's private network, with no host port, so `make run-dev` cannot reach it and `/readyz` returns 503 `redis_unavailable`. Use `docker run -d -p 127.0.0.1:6379:6379 redis:7.4.2-alpine` instead (tag as in `docker-compose.yaml`). The shortcut `make check` runs lint, contract check, and tests only, and it fails unless `DATABASE_URL` is exported.
 
 ## 8. Suggestion quality: the golden set [PLANNED, TASKS 3.7]
 
