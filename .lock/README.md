@@ -29,6 +29,25 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 | Reference | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | The evidence behind each decision, with confidence tags |
 | Reference | [HANDOFF.md](HANDOFF.md) | Where we are now, and the prompt to resume work |
 
+## Where each fact lives
+
+Each fact has **one home**. Everywhere else links to it instead of copying it, so the docs cannot drift apart.
+
+| Fact | Home | Other docs |
+|---|---|---|
+| What must always be true (invariants) | [TEST_STRATEGY.md](TEST_STRATEGY.md) §4 | cite `I-n` |
+| What can go wrong and what stops it | [THREAT_MODEL.md](THREAT_MODEL.md) §5 | cite `T-n` |
+| Why a decision was made | [DECISIONS/](DECISIONS/) | one line plus a link |
+| Every task: order, size, status, commits | [TASKS.md](TASKS.md) | [ROADMAP.md](ROADMAP.md) keeps only phase totals |
+| Estimates | task sizes in TASKS, summed in ROADMAP | the PRD quotes the ROADMAP total |
+| The connector contract | [ARCHITECTURE.md](ARCHITECTURE.md) §6 | [CONNECTORS.md](CONNECTORS.md) links to it |
+| Which apps, and how to add one | [CONNECTORS.md](CONNECTORS.md) | link only |
+| Screens and design tokens | [FRONTEND.md](FRONTEND.md) | link only |
+| Outside evidence | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | cite the section |
+| What to do when something breaks | [docs/OPERATIONS.md](../docs/OPERATIONS.md) | link only |
+
+If you are about to copy a fact into a second file, link to its home instead. Three checks run in the test suite (`tests/unit/test_lock_docs.py`): every relative link and heading anchor resolves, every status tag is in the legend below, and every doc is linked from another doc.
+
 ## Status legend
 
 - **[BUILT]** verified in the code at the baseline commit.
@@ -36,6 +55,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 - **[DOCUMENT]** accepted and described, not built.
 - **[OPEN]** not decided yet; listed in the PRD's open questions.
 - **[ESTIMATE]** a judgment or arithmetic, not a measurement.
+- **[PROPOSED]** a suggested value or design that awaits the owner's review (thresholds, tiers, expected answers, design tokens).
 - **[UNVERIFIED]** the source was secondary or could not be read.
 
 ## Rules for this folder
