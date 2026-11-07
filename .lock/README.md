@@ -19,6 +19,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 | Architecture | [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built (as-built vs planned), with diagrams |
 | Architecture | [DECISIONS/](DECISIONS/) | Why each major choice was made (ADR-0001 to ADR-0013) |
 | Architecture | [THREAT_MODEL.md](THREAT_MODEL.md) | What can go wrong, and what stops it |
+| Architecture | [CONNECTORS.md](CONNECTORS.md) | Which apps, in what order, and how a new app is added |
 | Plan | [ROADMAP.md](ROADMAP.md) | Phases, milestones, estimates, cut lines |
 | Plan | [TASKS.md](TASKS.md) | Every task: status, dependencies, done-when, commit plan |
 | Engineering | [TEST_STRATEGY.md](TEST_STRATEGY.md) | How we test: TDD workflow, invariants, fakes |

@@ -87,7 +87,7 @@ The compose services as built are `postgres`, `redis`, `migrate`, `app` and `wor
 
 ## 6. Connector contract [PLANNED]
 
-Each app is a **connector** behind one interface. A user's authorization for it is a **connection** with its own token and **switch**.
+Each app is a **connector** behind one interface. A user's authorization for it is a **connection** with its own token and **switch**. Which apps are planned, and the steps to add one, are in [CONNECTORS.md](CONNECTORS.md).
 
 ```mermaid
 classDiagram

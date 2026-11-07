@@ -101,7 +101,7 @@ Already built and kept: drafts and mark-as-read run immediately (tier A in [ADR-
 | Chat UI, notifications, voice, inbox search, meeting notes, scheduling links, follow-up reminders, "write in my voice" | Other products' features; the loop does not need them. |
 | RAG or vector search | Not needed; Gmail search exists. |
 | Auto-send or an autonomous mode | Contradicts [ADR-0001](DECISIONS/ADR-0001-approve-first.md). |
-| More connectors until Google and Outlook both work | Each adds auth, duplicate protection and a new attack surface. Jira or Notion via MCP is an optional later step. |
+| More connectors until Google and Outlook both work | Each adds auth, duplicate protection and a new attack surface. Jira or Notion via MCP is an optional later step; the catalog and the add-an-app playbook are in [CONNECTORS.md](CONNECTORS.md). |
 | Zoho | Evidence is thin; no official hosted MCP server found. |
 | Evals as a deliverable | Owner decision; standard tests only. |
 | "Zero retention" or "forgets everything" claims | Not deliverable. |
@@ -121,6 +121,7 @@ Already built and kept: drafts and mark-as-read run immediately (tier A in [ADR-
 
 Owner: the project owner. Needed by: daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
 
+- [ ] Which (up to three) apps follow Google and Outlook? Owner decision; see [CONNECTORS.md](CONNECTORS.md). Needed before Phase 4 ends.
 - [x] Do drafts and mark-as-read become proposals? No: they stay immediate as tier A ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 - [ ] Default daily cap for suggestions and for model calls.
 - [ ] Does Gmail preserve a client-set Message-ID on send, so reconciliation can find the message? (spike)
