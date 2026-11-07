@@ -153,3 +153,11 @@ One row per spike (ROADMAP task 2.1 and others), added when the spike is run. Ne
 | — | Does `include_granted_scopes` defeat read and propose scope tiering? | not run | — |
 | — | Which tier is the Google Tasks scope? | not run | — |
 | — | Is a Sent Items lookup reliable for Outlook reconciliation? | not run | — |
+
+## 11. User observations
+
+One row per round of sessions (task 4.5; plan in [PRD.md](PRD.md) §4). Participants are P1–P5; no names, no mail content.
+
+| Date | Participants | Finished tasks 1–3 unaided | Preferred queue or both | Decision |
+|---|---|---|---|---|
+| — | — | not run | not run | — |

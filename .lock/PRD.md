@@ -15,7 +15,7 @@ Details and confidence tags are in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md).
 - **What users complain about in AI inbox tools** (71 low-star Trustpilot reviews, small and self-selected): actions nobody approved and false "done" claims; most other complaints were billing. [anecdote]
 - **Attackers steer assistants through content.** Documented incidents include EchoLeak (M365 Copilot), the Superhuman AI exfiltration, the Atlassian MCP proof of concept and Notion agent exfiltration. Platform-security incidents also occurred: the Asana MCP tenant-isolation bug and the Composio token theft. [primary/discloser]
 - **Competitors' approval models are weak or undocumented.** Zapier Agents' approval is an instruction in the prompt; no platform checked documents approval expiry; no page read documents a persistent cross-app approval queue or per-action audit. [vendor-doc; absence in documentation is an inference]
-- **Assumption — needs validation via beta users:** people prefer a stored review queue to per-call chat prompts.
+- **Assumption — needs validation by observation (see the validation plan in §4):** people prefer a stored review queue to per-call chat prompts.
 
 ## 3. Users
 
@@ -27,6 +27,18 @@ Details and confidence tags are in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md).
 
 We believe **one approve-first assistant with one queue and one audit trail across connected apps** will let a busy person delegate triage and scheduling without losing control.
 We will know we are right when the success metrics in §6 hold on real test accounts and a first-time viewer can complete the review-and-approve flow unaided.
+
+### Validation plan
+
+The thesis "people prefer a stored review queue to per-call chat prompts" is an **assumption**. It is tested by watching people use the first working slice, not by asking opinions.
+
+- **When:** after task 4.0 works against the real API with the golden-set mailbox ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8) and **before** task 4.2, so what we learn can still change the screens. This is task 4.5.
+- **Who:** 3–5 people who use email every day; at most two are developers; none has read these docs. One at a time, about 30 minutes each, thinking aloud, with the observer silent.
+- **Tasks, with no help:** (1) say what needs attention; (2) say who will receive a reply if you approve it; (3) approve one suggestion you want and reject one you don't; (4) fix a wrong suggestion by editing it; (5) say what you would do about a card marked "Needs checking". Last, one question: "Would you rather have this queue, or ask a chat assistant and confirm in the chat? Why?"
+- **Record per person** (P1–P5, no names): which tasks they finished unaided, whether they opened the details before approving, anything they believed would happen that would not, and their answer to the last question. Use the demo mailbox only, never a participant's own mail.
+- **Pass [PROPOSED]:** at least 4 of 5 finish tasks 1–3 unaided (metric M7), at least 3 of 5 prefer the queue or want both, and nobody expects a card to do something it will not.
+- **Decision rules:** the queue wins → continue as planned. People skip the details → apply the revisit in [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md) (a step-up, smaller batches, and a batch approve for reversible cards). Most prefer a chat → keep the ledger and add an "Ask" box that creates proposals, so chat becomes another way to propose and the queue stays the only way to approve.
+- **Results** go in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §11.
 
 ## 5. Product in one screen
 
@@ -44,7 +56,7 @@ A person signs in with Google, adds apps with **"+"**, and sets each app to **Of
 | M4 | Tokens or mail bodies found in logs or prompts | 0 | canary-string test |
 | M5 | Cross-provider flow (Outlook mail → Google Calendar event) | pass | scripted run on test accounts |
 | M6 | Time from new mail to visible suggestions | TBD — measure in a demo run | log timestamps |
-| M7 | A first-time viewer completes review-and-approve unaided | TBD — needs 3–5 observers | observation, qualitative |
+| M7 | A first-time viewer completes review-and-approve unaided | at least 4 of 5 observers [PROPOSED] | observation sessions, per the validation plan in §4 |
 | M8 | CI green; test count and coverage reported | green; coverage TBD | CI |
 | M9 | Suggestion quality on the 20-case golden set ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8) | 8 of 8 safety cases safe (hard gate); at least 10 of 12 useful cases correct [PROPOSED] | manual live run, recorded for each model or prompt change |
 

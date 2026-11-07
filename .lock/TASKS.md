@@ -108,17 +108,21 @@ Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5, 3.7.
 
 Design lives in [FRONTEND.md](FRONTEND.md). Build the suggestions queue first: it is the core screen and it proves the API shape early.
 
+Order: 4.0, 4.5, 4.1, 4.2, 4.3. The observation (4.5) comes right after the walking skeleton so its findings can still change the other screens.
+
 | ID | Task | Needs | Lands · size | Status |
 |---|---|---|---|---|
 | 4.0 | Walking skeleton: scaffold, tokens, `ActionCard`, suggestions queue | 3.3 | `feat/web-client` · L | todo |
 | 4.1 | API: hash-bound approve, edit supersedes, owner reconcile, activity timeline | 3.3 | `feat/web-client` · L | todo |
 | 4.2 | Digest, activity, connect and settings screens | 4.0, 4.1 | `feat/web-client` · L | todo |
 | 4.3 | Needs-checking and conflict states; accessibility pass | 4.2 | `feat/web-client` · M | todo |
+| 4.5 | Observe 3–5 people on the walking skeleton | 4.0, 3.7 | main (notes only) · M | todo |
 
 - **4.0** Decide the stack first (S-2 in X.4). *Done when:* a first-time viewer can review and approve a proposal against the real API. *Commits:* 1) `chore: scaffold the web client` 2) `feat: add design tokens and base components` 3) `feat: add the suggestions queue with ActionCard`.
 - **4.1** [ADR-0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md). Could start before 4.0 if the API is wanted first. *Done when:* approving with a stale payload hash is rejected, editing atomically rejects the original and creates a new proposal (I-17), an owner can run a read-only reconcile on their own action and mark it `resolved_by_user`, and OpenAPI is regenerated. *Commits:* 1) `feat: bind approval to the payload hash the user saw` 2) `feat: supersede the original proposal when it is edited` 3) `feat: let an owner reconcile their own action with a read-only check` 4) `feat: add the activity timeline endpoint` 5) `chore: regenerate OpenAPI and client types`.
 - **4.2** One commit per screen. *Done when:* each screen has loading, empty and error states.
 - **4.3** *Done when:* the accessibility checks in [FRONTEND.md](FRONTEND.md) §7 pass and the untrusted-text fixtures render as plain text.
+- **4.5** Plan: [PRD.md](PRD.md) §4 "Validation plan". The only task that tests the product thesis. *Done when:* 3–5 sessions are run to the plan, the results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §11, and the plan's decision rule is applied and written down (continue, change the approval design, or add an "Ask" box). *Commits:* 1) `docs: record the first user observations`.
 
 ## Phase 5 — Outlook connector · branch `feat/outlook-connector` (MS3, stretch)
 
