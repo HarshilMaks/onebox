@@ -119,8 +119,9 @@ Already built and kept: drafts and mark-as-read run immediately (tier A in [ADR-
 
 ## 9. Open questions
 
-Owner: the project owner. Needed by: daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
+Owner: the project owner. Needed by: weekly hours (now); daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
 
+- [ ] How many hours a week can the owner give the project? It turns the day totals into calendar time ([ROADMAP.md](ROADMAP.md)).
 - [ ] Which (up to three) apps follow Google and Outlook? Owner decision; see [CONNECTORS.md](CONNECTORS.md). Needed before Phase 4 ends.
 - [x] Do drafts and mark-as-read become proposals? No: they stay immediate as tier A ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 - [ ] Default daily cap for suggestions and for model calls.
@@ -140,7 +141,7 @@ Owner: the project owner. Needed by: daily caps (3.2); Message-ID survival, scop
 | Outlook reconciliation is weaker than Gmail's | High | Medium | Treat unclear outcomes as *needs checking*; say so in the docs |
 | Scope growth | High | High | Freeze rule in [ROADMAP.md](ROADMAP.md); cut lines |
 | Google Testing-mode token expiry breaks the demo weekly | High | Low | Clear "reconnect needed" state; demo mode |
-| Solo effort: about 7–14 weeks for the Google loop (plan on 10) and 10–18 with Outlook (plan on 14) [ESTIMATE, summed from the [TASKS.md](TASKS.md) sizes] | Medium | Medium | Ship the Google loop first; Outlook is a stretch milestone; the roadmap lists the order of sacrifice |
+| Solo effort: about 7–15 weeks for the Google loop (plan on 11) and 10–19 with Outlook (plan on 14), at 30 hours a week; the [ROADMAP.md](ROADMAP.md) converts this to other weekly hours [ESTIMATE, summed from the [TASKS.md](TASKS.md) sizes] | Medium | Medium | Ship the Google loop first; Outlook is a stretch milestone; the roadmap lists the order of sacrifice |
 
 ---
 *Status: DRAFT. Requirements only; implementation plan in [ROADMAP.md](ROADMAP.md).*
