@@ -32,7 +32,7 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 7. **Tokens are encrypted**, with the key outside the database. [BUILT: the keyring is a read-only file mounted from the host; a key-management service is PLANNED]
 8. **Disconnect revokes at the provider** and deletes stored tokens. [PLANNED]
 9. **No tokens or mail bodies in logs or prompts**, enforced by a canary test. [PLANNED]
-10. **Every external write goes through the ledger,** except the assistant's `create_draft` and `mark_as_read`. [agent path BUILT; the REST mail endpoints still bypass it, see §7]
+10. **Every external write goes through the ledger,** except the assistant's `create_draft` and `mark_as_read` (tier A, [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)). [agent path BUILT; the REST mail endpoints still bypass it, see §7]
 
 ## 5. Threats and controls
 
@@ -59,6 +59,7 @@ User refresh tokens · mail, calendar and task content (read from providers) · 
 | T19 | **Injection through invites and look-alike text** (attendees, bidi characters, look-alike domains, calendar data in the reader prompt) | Attendees and recipients limited to the verified sender; reject bidi and control characters; show punycode; the reader sees one message and no calendar data ([ADR-0007](DECISIONS/ADR-0007-zero-tool-reader.md)) | PLANNED | Medium |
 | T20 | **A restored backup resurrects executed approvals** | After a restore, expire `pending` and quarantine `processing` actions before serving ([ADR-0012](DECISIONS/ADR-0012-data-lifecycle.md)) | DOCUMENT | Low |
 | T21 | **Deletion leaves data behind** (summaries, jobs, caches, audit) | Connection-scoped data and a deletion matrix (ADR-0012; [ARCHITECTURE.md](ARCHITECTURE.md) §7) | PLANNED | Medium |
+| T22 | **Approval fatigue: a person approves without reading** | Approval tiers ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)): effort goes to what cannot be undone; tier C is never batched and always shows the exact recipient and time; a batch for tier B only after the user test (task 4.5) | PLANNED | Medium; a human factor that tests cannot close, so it is observed, not asserted |
 
 ## 6. Breach scenarios
 

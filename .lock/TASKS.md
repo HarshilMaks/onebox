@@ -76,7 +76,7 @@ Order: 2.1, 2.2, 2.3, 2.6, 2.4, 2.5. Reason: connection-scoped data (2.6) must e
 | 2.5 | Automation per connection, with fairness | 2.6 | `feat/connector-contract` · L | todo |
 
 - **2.1** Needs a throwaway Google test account (never committed). *Done when:* results are written into [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10, [PRD.md](PRD.md) §9 is updated and ADR-0005 is amended if scope tiering fails. *Commits:* 1) `docs: record spike results for Gmail markers and scope tiering`.
-- **2.2** *Done when:* the shared contract tests pass for `GoogleConnector` and the old suite is green. *Commits:* 1) `feat: define the connector contract and shared contract tests` 2) `refactor: move Google handlers behind GoogleConnector`.
+- **2.2** *Done when:* the shared contract tests pass for `GoogleConnector`, the old suite is green, and every action schema declares an approval tier with an undeclared one treated as C (I-22, [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)). *Commits:* 1) `feat: define the connector contract and shared contract tests` 2) `feat: declare an approval tier on every action schema` 3) `refactor: move Google handlers behind GoogleConnector`.
 - **2.3** Includes the migration from `onebox_tokens`, and a "+" flow whose OAuth state stores a session hash and a PKCE verifier (I-16, T-16). *Done when:* Off blocks all token use, Read blocks proposals (policy tests) and a callback from a different session is rejected. *Commits:* 1) `feat: add the connections table and migrate stored tokens` 2) `feat: enforce Off, Read and Propose per connection` 3) `feat: add the "+" consent flow bound to the session` 4) `feat: request narrower scopes where the provider allows`.
 - **2.6** [ADR-0012](DECISIONS/ADR-0012-data-lifecycle.md). Split in two if it passes three days: commits 1–4 (schema), then 5–6 (user-facing deletion). *Done when:* deleting a connection or all of a user's data leaves no summaries, jobs or cached data (I-21), audit rows carry only ids, hashes and states, and the restore procedure expires `pending` and quarantines `processing` actions (T-20, T-21). *Commits:* 1) `feat: scope triage, job and mailbox tables to a connection` (migration, backfill) 2) `feat: stop audit rows cascading and keep them content-free` 3) `feat: bind stored credentials to the connection in the key context` (re-encrypt migration) 4) `feat: expire and quarantine actions after a restore` 5) `feat: add delete-my-data` 6) `docs: describe the restore and deletion procedures`.
 - **2.4** *Done when:* the provider revoke is called, the connection and its data are gone and later calls fail closed (I-13). *Commits:* 1) `feat: revoke at the provider and delete the connection on disconnect` 2) `test: calls fail closed after disconnect`.
@@ -108,7 +108,7 @@ Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5, 3.7.
 
 Design lives in [FRONTEND.md](FRONTEND.md). Build the suggestions queue first: it is the core screen and it proves the API shape early.
 
-Order: 4.0, 4.5, 4.1, 4.2, 4.3. The observation (4.5) comes right after the walking skeleton so its findings can still change the other screens.
+Order: 4.0, 4.5, 4.1, 4.2, 4.3, then 4.4 only if 4.5 shows approval fatigue. The observation (4.5) comes right after the walking skeleton so its findings can still change the other screens.
 
 | ID | Task | Needs | Lands · size | Status |
 |---|---|---|---|---|
@@ -117,12 +117,14 @@ Order: 4.0, 4.5, 4.1, 4.2, 4.3. The observation (4.5) comes right after the walk
 | 4.2 | Digest, activity, connect and settings screens | 4.0, 4.1 | `feat/web-client` · L | todo |
 | 4.3 | Needs-checking and conflict states; accessibility pass | 4.2 | `feat/web-client` · M | todo |
 | 4.5 | Observe 3–5 people on the walking skeleton | 4.0, 3.7 | main (notes only) · M | todo |
+| 4.4 | Optional: batch approve for tier B proposals (not in the totals) | 4.1, 4.5 | `feat/web-client` · M | todo |
 
 - **4.0** Decide the stack first (S-2 in X.4). *Done when:* a first-time viewer can review and approve a proposal against the real API. *Commits:* 1) `chore: scaffold the web client` 2) `feat: add design tokens and base components` 3) `feat: add the suggestions queue with ActionCard`.
-- **4.1** [ADR-0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md). Could start before 4.0 if the API is wanted first. *Done when:* approving with a stale payload hash is rejected, editing atomically rejects the original and creates a new proposal (I-17), an owner can run a read-only reconcile on their own action and mark it `resolved_by_user`, and OpenAPI is regenerated. *Commits:* 1) `feat: bind approval to the payload hash the user saw` 2) `feat: supersede the original proposal when it is edited` 3) `feat: let an owner reconcile their own action with a read-only check` 4) `feat: add the activity timeline endpoint` 5) `chore: regenerate OpenAPI and client types`.
+- **4.1** [ADR-0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md). Could start before 4.0 if the API is wanted first. *Done when:* approving with a stale payload hash is rejected, editing atomically rejects the original and creates a new proposal (I-17), an owner can run a read-only reconcile on their own action and mark it `resolved_by_user`, and OpenAPI is regenerated. *Commits:* 1) `feat: bind approval to the payload hash the user saw` 2) `feat: supersede the original proposal when it is edited` 3) `feat: let an owner reconcile their own action with a read-only check` 4) `feat: add the activity timeline endpoint, including tier A actions` 5) `chore: regenerate OpenAPI and client types`.
 - **4.2** One commit per screen. *Done when:* each screen has loading, empty and error states.
 - **4.3** *Done when:* the accessibility checks in [FRONTEND.md](FRONTEND.md) §7 pass and the untrusted-text fixtures render as plain text.
 - **4.5** Plan: [PRD.md](PRD.md) §4 "Validation plan". The only task that tests the product thesis. *Done when:* 3–5 sessions are run to the plan, the results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §11, and the plan's decision rule is applied and written down (continue, change the approval design, or add an "Ask" box). *Commits:* 1) `docs: record the first user observations`.
+- **4.4** Built **only if** 4.5 shows approval fatigue; otherwise it stays `todo` and costs nothing. [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md) rule 2. *Done when:* a request approves up to 10 selected tier B cards, each with its own payload hash; a tier C card cannot be added to a batch; one failing item leaves the others intact (I-22). *Commits:* 1) `feat: approve a batch of selected tier B proposals` 2) `feat: add the batch action to the suggestions screen`.
 
 ## Phase 5 — Outlook connector · branch `feat/outlook-connector` (MS3, stretch)
 

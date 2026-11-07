@@ -44,7 +44,7 @@ The thesis "people prefer a stored review queue to per-call chat prompts" is an 
 
 A person signs in with Google, adds apps with **"+"**, and sets each app to **Off / Read / Propose**. New mail produces a short **digest** and **suggestions** (reply, event, task). Each suggestion shows the exact recipient or time, a link to the source mail, and a conflict warning. The person edits, approves or rejects. Approving runs it at most once. An **activity timeline** shows everything. **Disconnect** revokes access and deletes the stored data.
 
-**Design principles:** the AI never acts · one queue · least privilege · honest status · nothing happens twice · plain text only.
+**Design principles:** the AI never sends, invites or creates anything on its own · approval effort matches reversibility ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)) · one queue · least privilege · honest status · nothing happens twice · plain text only.
 
 ## 6. Success metrics
 
@@ -78,8 +78,9 @@ A person signs in with Google, adds apps with **"+"**, and sets each app to **Of
 | FR-10 | Disconnect an app (revoke at the provider; delete its tokens, summaries, jobs and cached data) and delete all their data; audit rows keep only ids, hashes and states | 2 |
 | FR-11 | Try the product in demo mode without signing in | 6 |
 | FR-12 | Be told "done" only when the provider confirmed | 3 |
+| FR-13 | See on each suggestion whether it stays in their account or leaves it and, only if testing shows approval fatigue, approve several reversible ones together | 4 |
 
-Already built and kept: drafts and mark-as-read run immediately; send, reply, event and task become proposals. [OPEN: should drafts and mark-as-read also become proposals when the switch is Propose?]
+Already built and kept: drafts and mark-as-read run immediately (tier A in [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md); they need the Propose switch); send, reply, event and task become proposals.
 
 ### Non-functional requirements
 
@@ -118,9 +119,9 @@ Already built and kept: drafts and mark-as-read run immediately; send, reply, ev
 
 ## 9. Open questions
 
-Owner: the project owner. Needed by: drafts and mark-as-read (before task 0.6); daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
+Owner: the project owner. Needed by: daily caps (3.2); Message-ID survival, scope tiering and the Tasks tier (2.1); Sent Items reliability (5.2); re-consent and demo hosting (6.1). Spike results are recorded in [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) §10.
 
-- [ ] Do drafts and mark-as-read become proposals under the Propose switch?
+- [x] Do drafts and mark-as-read become proposals? No: they stay immediate as tier A ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 - [ ] Default daily cap for suggestions and for model calls.
 - [ ] Does Gmail preserve a client-set Message-ID on send, so reconciliation can find the message? (spike)
 - [ ] Does splitting Read and Propose into separate tokens conflict with Google's `include_granted_scopes`? (spike)

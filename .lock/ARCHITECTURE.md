@@ -113,6 +113,7 @@ Rules:
 3. `reconcile()` is a read-only lookup that decides whether an unknown write landed. Google has strong lookups (Gmail Message-ID marker search, deterministic Calendar event ID, Tasks marker). A generic MCP connector has none, so its unknown outcomes stay *needs checking*.
 4. **Switch semantics:** Off = the token is not used (only Disconnect removes it); Read = read tools only; Propose = read plus proposals. Enforced by the tool allowlist and re-checked when an approved action is claimed; narrower scopes are requested where the provider allows (see [ADR-0005](DECISIONS/ADR-0005-permission-switches.md) and the spike on `include_granted_scopes`).
 5. **MCP connector:** write tools are always wrapped as proposals, tool annotations such as `readOnlyHint` are untrusted hints, and OneBox keeps its own allowlist. See ADR-0003.
+6. **Approval tier:** every action schema declares a tier from A to D ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)). A runs at once and is audited; B and C are proposals, and C is never batched; D is not offered. A schema with no tier is treated as C, and the model cannot set a tier.
 
 ## 7. Data model
 
@@ -403,6 +404,7 @@ All figures are [ESTIMATE] unless a source is named; assumptions are stated so t
 | Hash-bound approval; reconcile quiet period | No stale or early-failed writes | More fields, states and tests | A provider offers send idempotency keys | [0010](DECISIONS/ADR-0010-approval-and-execution-protocol.md) |
 | Session-bound OAuth; own sessions | No forwarded-link account linking | More code than a library flow | A managed auth provider is adopted | [0011](DECISIONS/ADR-0011-identity-and-oauth-hardening.md) |
 | Connection-scoped data; tombstones | Real deletion; no re-proposals | Migration work | Scale beyond the demo | [0012](DECISIONS/ADR-0012-data-lifecycle.md) |
+| Approval tiers by reversibility | Approval effort goes where a mistake cannot be undone | A second concept to explain | A user test shows people skip the details on tier C | [0013](DECISIONS/ADR-0013-approval-tiers.md) |
 
 ## 15. Open design questions
 

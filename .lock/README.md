@@ -17,7 +17,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 | Product | [PRD.md](PRD.md) | What are we building, for whom, and how do we know it works? |
 | Product | [FRONTEND.md](FRONTEND.md) | What do the screens do, and what is the design system? |
 | Architecture | [ARCHITECTURE.md](ARCHITECTURE.md) | How is it built (as-built vs planned), with diagrams |
-| Architecture | [DECISIONS/](DECISIONS/) | Why each major choice was made (ADR-0001 to ADR-0012) |
+| Architecture | [DECISIONS/](DECISIONS/) | Why each major choice was made (ADR-0001 to ADR-0013) |
 | Architecture | [THREAT_MODEL.md](THREAT_MODEL.md) | What can go wrong, and what stops it |
 | Plan | [ROADMAP.md](ROADMAP.md) | Phases, milestones, estimates, cut lines |
 | Plan | [TASKS.md](TASKS.md) | Every task: status, dependencies, done-when, commit plan |
@@ -57,5 +57,6 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 | **Connector** [PLANNED] | An adapter for one app (Google, Microsoft, …) behind a common contract. |
 | **Connection** [PLANNED] | One user's authorization for one connector, with its own token and permission switch. |
 | **Switch** [PLANNED] | Per-connection permission: **Off**, **Read**, or **Propose**. |
+| **Tier** [PLANNED] | An action's approval class, A to D, set by its connector. A is undoable and private and runs at once; B stays in your account; C leaves it and always needs individual approval; D is not offered. |
 | **Demo mode** [PLANNED] | A no-sign-in path on synthetic data and canned model output. |
 | **Testing mode** | Google's unverified-app status: up to 100 allowlisted users and 7-day token expiry. |

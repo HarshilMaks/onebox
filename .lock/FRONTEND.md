@@ -8,7 +8,7 @@
 2. **One queue.** Everything that needs a decision is a card in one list.
 3. **Honest status.** A card shows exactly what the server says. Never "done" before the provider confirmed.
 4. **Show what will happen.** Real recipient, real time, real text, and the source mail.
-5. **Calm and keyboard-first.** No animation that carries meaning, no toasts that hide errors, no "approve all".
+5. **Calm and keyboard-first.** No animation that carries meaning, no toasts that hide errors, no "approve all" (a batch action for reversible tier B cards may be added only if the user test shows fatigue; see [ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 6. **No chat UI.** The assistant surfaces through cards, not a conversation.
 
 ## 2. Screens (four)
@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | **Suggestions** | Decide what OneBox proposes | List of `ActionCard`, newest first; filter by status | Approve · Edit · Reject · Open source mail | `GET /actions`, `POST /actions/{id}/approve`, `/reject` (built); edit-before-approve (planned) |
 | **Digest** | See what needs attention | Short summaries of new mail, most important first | Open source mail; jump to its suggestions | `GET /mail/triage` (built); ranking (planned) |
-| **Activity** | See everything that happened | One timeline across apps: proposed, approved, done, needs checking | Resolve *needs checking* | Activity endpoint (planned, task 4.1); audit events exist |
+| **Activity** | See everything that happened | One timeline across apps: proposed, approved, done, needs checking, and tier A actions marked "Done automatically" | Resolve *needs checking* | Activity endpoint (planned, task 4.1); audit events exist |
 | **Connect and settings** | Control access | One `ConnectionCard` per app with the Off / Read / Propose switch; the "+" button; time zone and working hours; Disconnect; Delete my data | Add, switch, disconnect, delete | Connections and settings endpoints (planned, phases 1–2) |
 
 Every screen has **loading, empty and error** states. Demo mode shows a permanent "Demo data" banner.
@@ -26,7 +26,7 @@ Every screen has **loading, empty and error** states. Demo mode shows a permanen
 
 | Component | Purpose | Notes |
 |---|---|---|
-| `ActionCard` | One proposal | Variants reply, event, task. Shows the exact payload, source link, short reason, conflict notice, status badge, history. Buttons: Approve, Edit, Reject. |
+| `ActionCard` | One proposal | Variants reply, event, task. Shows the exact payload, source link, short reason, conflict notice, status badge, history. Buttons: Approve, Edit, Reject. A one-line effect notice comes from its tier: "Only you will see this" (B) or "This leaves your account" (C). |
 | `StatusBadge` | One of the seven states | Icon plus text, never colour alone (see §4) |
 | `UntrustedText` | Renders any outside text | Plain text; truncates with "show more"; marks invisible and direction-override characters; never auto-links |
 | `SourceLink` | Opens the original mail in its own app | Shown as text with an explicit open action; `rel="noopener noreferrer"` |
@@ -63,7 +63,7 @@ Semantic tokens with light and dark values, defined once as CSS variables.
 2. Show the **verified sender**. If a `Reply-To` or `Cc` differs, show that difference on the card.
 3. Approve, reject and edit are POST requests carrying the CSRF token; never GET.
 4. Wait for the server's answer before changing a card's status. No optimistic "Done".
-5. No "approve all", no "always allow" in version one.
+5. No "approve all", no "always allow" in version one. Any batch action is limited to tier B, lists the selected cards and never includes tier C ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 6. After approving, show the final state the server returns and a link to its history.
 
 ## 6. Data and state
@@ -87,9 +87,11 @@ Default: Vite, React and TypeScript; accessible headless primitives plus the CSS
 ## 9. Build order
 
 1. **4.0 walking skeleton:** tokens, `ActionCard`, `StatusBadge`, `UntrustedText`, the Suggestions screen against the real API. This proves the contract early and is what a reviewer sees first.
-2. **4.1** API additions the other screens need.
-3. **4.2** Digest, Activity, Connect and settings.
-4. **4.3** Needs-checking and conflict states; accessibility pass.
+2. **4.5** watch 3–5 people use it ([PRD.md](PRD.md) §4) and adjust the plan.
+3. **4.1** API additions the other screens need.
+4. **4.2** Digest, Activity, Connect and settings.
+5. **4.3** Needs-checking and conflict states; accessibility pass.
+6. **4.4** only if 4.5 shows approval fatigue: a batch approve for tier B cards ([ADR-0013](DECISIONS/ADR-0013-approval-tiers.md)).
 
 ## 10. Definition of done for any screen
 

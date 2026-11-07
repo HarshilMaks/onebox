@@ -62,6 +62,7 @@ Recent history usually lands the test commit after the feature commit (for examp
 | 19 | Event attendees and reply recipients are limited to the verified sender; bidi and control characters are rejected | PLANNED | none |
 | 20 | A confirmed provider result is accepted when the attempt token still matches, even after the lease expired | PLANNED | none |
 | 21 | Disconnecting or deleting removes the connection's summaries, jobs and cached data | PLANNED | none; the triage and job tables carry no user or connection id today |
+| 22 | Every action schema declares a tier; an undeclared one is treated as C; tier C is never batched and no tier D tool exists | PLANNED | none |
 
 ## 5. Planned test types for new work
 
