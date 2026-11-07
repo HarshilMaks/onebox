@@ -108,6 +108,42 @@ Do not run `alembic downgrade` against shared data without an owner-approved,
 revision-specific rollback plan and a restore test. Preserve pending actions,
 notification jobs, watches, and reconciliation evidence for operator review.
 
+## When something is wrong
+
+Start from the symptom. "Today" describes what the code does now; "Planned" names the task in `.lock/TASKS.md` that changes it.
+
+### An action is stuck in `processing` or shows "needs checking" (`reconciliation_required`)
+
+1. Read it: `GET /actions/{action_id}` shows the status and its audit events.
+2. Today: an authorized operator (a user id in `PENDING_ACTION_OPERATOR_IDS`) calls `POST /actions/{action_id}/reconcile`. It searches the provider for the deterministic marker, records what it found, and changes the state only when the outcome is known.
+3. A `processing` row whose 2-minute lease has expired moves to `reconciliation_required` only when something touches it. No automatic sweep exists yet (planned: task 0.4).
+4. Before trusting `failed` on a send, look in Sent, Spam and Trash by hand. Today a lookup that finds nothing can say `failed` at once even if the message lands a few minutes later (planned: task 0.13, a 10-minute quiet period).
+5. Never approve again, resend by hand, edit the stored payload or delete the row. The payload hash check refuses an edited row, and a second send is a duplicate.
+
+### New mail is not being processed, or `/readyz` is red
+
+1. Check `/livez` and `/readyz`, then with the operator token `/mail/agent/health` and `/mail/agent/status` (valid watch, fresh worker heartbeat, idle recovery, no dead-lettered jobs).
+2. Expired watch: `POST /mail/renew-watch` after checking the status. Never call Gmail `users.stop` during a rolling restart. See "Watch renewal, recovery, and reconciliation" above for `manual_required`.
+3. Dead-lettered jobs: read the job's error code. `credentials_unavailable` means the next section.
+4. Known cause: a retention cleanup that fails every time runs before the heartbeat, the watch renewal and the job claim, so the worker looks alive but claims no work. Look for repeated cleanup errors in the worker log (planned: task 0.2).
+
+### Google says the token expired or was revoked
+
+1. What happens: a failed refresh marks the stored connection `reconnect_required` and calls raise a reconnect error. The worker records `watch_credentials_unavailable` for renewals and `credentials_unavailable` for jobs. `GET /agent/status` shows `not_connected`; it does not yet say that a reconnect is what is needed (planned: task 2.3).
+2. Expected in the demo: Google's Testing status expires authorizations seven days after consent (checked against Google's own page on 2026-11-07).
+3. Fix: the user opens `GET /agent/oauth/start` and consents again, then `GET /agent/status` should show `connected`. Afterwards check `/mail/agent/status` for dead-lettered jobs or `manual_required`.
+
+### After restoring a database backup
+
+A restored database can hold approvals that were already carried out. Serving traffic from it could run them again.
+
+1. Stop the API and the worker before the restore, and keep them stopped afterwards.
+2. Today there is no restore command. With the owner reviewing the rows, in one transaction: set every `pending` action to `expired` and every `processing` action to `reconciliation_required`. Record the image and the Alembic revision.
+3. Start the API, then reconcile each `reconciliation_required` action as in the first section.
+4. Planned: a command that does steps 2 and 3 safely (task 2.6, [ADR-0012](../.lock/DECISIONS/ADR-0012-data-lifecycle.md)).
+
+Alerts that say which of these happened are planned in task 6.3; extend this section when they exist.
+
 ## Release gate
 
 From a clean checkout, install the hashed lock, regenerate/check the OpenAPI

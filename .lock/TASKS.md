@@ -149,7 +149,7 @@ Start only after Phase 6 is done or the owner decides to trade the demo polish f
 | 6.3 | Alerts, spend cap, per-call telemetry | 6.2 | `feat/demo-and-packaging` · M | todo |
 | 6.4 | README, diagram, video, finalize ADRs | 6.3 | `feat/demo-and-packaging` · M | todo |
 
-*Done when* (6.4): a stranger follows the README to a running demo. 6.1 is done when a demo user cannot reach a real connection because the demo runs against its own database ([ADR-0009](DECISIONS/ADR-0009-demo-strategy.md)), and the seeded mailbox is built from the golden-set cases ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8).
+*Done when* (6.3): each alert fires in a test or a staged drill, and the "When something is wrong" section of [docs/OPERATIONS.md](../docs/OPERATIONS.md) names the alert that signals each symptom. *Done when* (6.4): a stranger follows the README to a running demo. 6.1 is done when a demo user cannot reach a real connection because the demo runs against its own database ([ADR-0009](DECISIONS/ADR-0009-demo-strategy.md)), and the seeded mailbox is built from the golden-set cases ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8).
 
 ## Cross-cutting (any time, on `main`)
 

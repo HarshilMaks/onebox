@@ -24,6 +24,7 @@ Today (built): Google Gmail, Calendar and Tasks; background mail summaries; the 
 | Plan | [TASKS.md](TASKS.md) | Every task: status, dependencies, done-when, commit plan |
 | Engineering | [TEST_STRATEGY.md](TEST_STRATEGY.md) | How we test: TDD workflow, invariants, fakes |
 | Engineering | [ENGINEERING_PRACTICES.md](ENGINEERING_PRACTICES.md) | Commands, CI, branching, commits, definition of done |
+| Engineering | [Operations runbook](../docs/OPERATIONS.md) | Deploy, recover, and what to do when an action is stuck, a token expires or a backup is restored |
 | Engineering | [AGENT_GUIDE.md](AGENT_GUIDE.md) | How AI agents and people work here, step by step |
 | Reference | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | The evidence behind each decision, with confidence tags |
 | Reference | [HANDOFF.md](HANDOFF.md) | Where we are now, and the prompt to resume work |
