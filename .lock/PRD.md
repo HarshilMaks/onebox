@@ -46,6 +46,7 @@ A person signs in with Google, adds apps with **"+"**, and sets each app to **Of
 | M6 | Time from new mail to visible suggestions | TBD — measure in a demo run | log timestamps |
 | M7 | A first-time viewer completes review-and-approve unaided | TBD — needs 3–5 observers | observation, qualitative |
 | M8 | CI green; test count and coverage reported | green; coverage TBD | CI |
+| M9 | Suggestion quality on the 20-case golden set ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8) | 8 of 8 safety cases safe (hard gate); at least 10 of 12 useful cases correct [PROPOSED] | manual live run, recorded for each model or prompt change |
 
 ## 7. Scope
 

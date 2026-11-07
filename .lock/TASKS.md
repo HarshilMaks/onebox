@@ -84,7 +84,7 @@ Order: 2.1, 2.2, 2.3, 2.6, 2.4, 2.5. Reason: connection-scoped data (2.6) must e
 
 ## Phase 3 — Email to proposals · branch `feat/email-to-proposals` (MS2, part 1)
 
-Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5.
+Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5, 3.7.
 
 | ID | Task | Needs | Lands · size | Status |
 |---|---|---|---|---|
@@ -94,6 +94,7 @@ Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5.
 | 3.4 | Honest status in assistant replies | 3.3 | `feat/email-to-proposals` · S | todo |
 | 3.6 | Tombstones and bounded resync | 3.3 | `feat/email-to-proposals` · M | todo |
 | 3.5 | Fault-injection tests for lost responses | 3.3, 0.12 | `feat/email-to-proposals` · M | todo |
+| 3.7 | Golden set: fixture, validator check and first live run | 3.3 | `feat/email-to-proposals` · M | todo |
 
 - **3.1** The reader sees one message and no calendar data ([ADR-0007](DECISIONS/ADR-0007-zero-tool-reader.md)); the output gains an `importance` field for the digest order. *Done when:* schema violations are rejected and a prompt-breakout fixture cannot change the output structure (I-12). *Commits:* 1) `feat: define the triage output schema and parser` 2) `feat: ask the zero-tool reader for typed output, one message at a time`.
 - **3.2** *Done when:* I-8, I-9 and I-19 pass; an exhausted daily cap leaves the message in a visible `deferred` state and does not advance the cursor. *Commits:* 1) `feat: resolve reply recipients from the verified sender only` (verified means `dmarc=pass`) 2) `feat: limit event attendees to the verified sender and reject bidi and control characters` 3) `feat: judge calendar conflicts on the user's local day` 4) `feat: cap suggestions per user per day in PostgreSQL, failing closed to deferred` 5) `feat: dedupe suggestions by message and type`.
@@ -101,6 +102,7 @@ Order: 3.1, 3.2, 3.3, 3.4, 3.6, 3.5.
 - **3.4** *Done when:* I-10 passes. *Commits:* 1) `fix: never report success before the provider confirms`.
 - **3.6** *Done when:* a message is never proposed twice after its work row was cleaned up (tombstones hold provider ids only, 90 days), and a failing job escalates to a bounded resync before `dead_letter`. *Commits:* 1) `feat: keep message tombstones after cleanup` 2) `test: bounded resync and dead letter for repeated job failures`.
 - **3.5** *Done when:* zero duplicate effects per action type under injected lost responses (I-4). *Commits:* 1) `test: add a fault-injecting HTTP wrapper for provider calls` 2) `test: assert zero duplicate effects per action type`.
+- **3.7** Spec: [TEST_STRATEGY.md](TEST_STRATEGY.md) §8. *Done when:* the 20-case fixture exists, CI shows the validator accepting every expected output and rejecting an unsafe variant of every S-case, and a dated live-run note records the model, the score and the failing ids (PRD metric M9). *Commits:* 1) `test: add the golden email fixture` 2) `test: run the validator over the golden set` 3) `docs: record the first live reader run`.
 
 ## Phase 4 — Web client · branch `feat/web-client` (MS2, part 2)
 
@@ -141,7 +143,7 @@ Start only after Phase 6 is done or the owner decides to trade the demo polish f
 | 6.3 | Alerts, spend cap, per-call telemetry | 6.2 | `feat/demo-and-packaging` · M | todo |
 | 6.4 | README, diagram, video, finalize ADRs | 6.3 | `feat/demo-and-packaging` · M | todo |
 
-*Done when* (6.4): a stranger follows the README to a running demo. 6.1 is done when a demo user cannot reach a real connection because the demo runs against its own database ([ADR-0009](DECISIONS/ADR-0009-demo-strategy.md)).
+*Done when* (6.4): a stranger follows the README to a running demo. 6.1 is done when a demo user cannot reach a real connection because the demo runs against its own database ([ADR-0009](DECISIONS/ADR-0009-demo-strategy.md)), and the seeded mailbox is built from the golden-set cases ([TEST_STRATEGY.md](TEST_STRATEGY.md) §8).
 
 ## Cross-cutting (any time, on `main`)
 
