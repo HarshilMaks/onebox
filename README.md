@@ -100,15 +100,6 @@ flowchart TD
     T -->|"encrypted credential"| GWS
 ```
 
-### Supported Process Roles
-
-| Role | Target Command | Primary Responsibilities |
-| --- | --- | --- |
-| `api` | `uvicorn server.main:app` | Serves REST/SSE routes, authenticates user JWTs, handles OAuth flows, accepts Pub/Sub webhook pushes, and manages pending action approvals. |
-| `automation_worker` | `python -m server.workers` | Claims pending notification jobs from PostgreSQL, executes inbox triage with zero tools, renews Gmail push watches, and runs retention cleanups. |
-| `combined` | `uvicorn server.main:app` | **Local development only**. Runs API routes and in-process automation worker tasks concurrently. |
-| `migrate` | `alembic upgrade head` | One-shot migration container running schema upgrades prior to API or worker boot. |
-
 ---
 
 ## Prerequisites
@@ -215,53 +206,7 @@ Input limits, the generational mail cache, the per-run tool allowlist, provider 
 
 ## Docker Deployment
 
-OneBox provides a production-grade multi-container topology via `docker-compose.yaml` consisting of `postgres`, `redis`, a one-shot `migrate` service, the FastAPI `app`, and the background `worker`:
-
-```bash
-# Verify Compose configuration syntax
-make compose-config
-
-# Launch all services in background
-make compose-up
-```
-
-Credential and keyring files are mounted read-only from the host into `/run/secrets/`:
-
-```bash
-export GOOGLE_OAUTH_CLIENT_SECRETS_HOST_PATH="$PWD/onebox_oauth.json"
-export GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH="$PWD/executive-agent.json"
-export OAUTH_TOKEN_KEYRING_HOST_PATH="$PWD/onebox-oauth-token-keyring.json"
-export OAUTH_TOKEN_ACTIVE_KEY_ID="active-key-id"
-export POSTGRES_PASSWORD="secure-postgres-password"
-export SECRET_KEY="$(openssl rand -hex 32)"   # at least 32 bytes; shorter keys fail startup
-export GOOGLE_PROJECT_ID="your-gcp-project-id"
-
-# The migrate, app, and worker services share the automation settings, so Compose also requires:
-export AUTOMATION_OWNER_ID="00000000-0000-0000-0000-000000000000"   # OneBox user UUID
-export PUBSUB_TOPIC="projects/your-gcp-project-id/topics/gmail-notifications"
-export PUBSUB_SUBSCRIPTION="projects/your-gcp-project-id/subscriptions/gmail-notifications"
-export PUBSUB_PUSH_AUDIENCE="https://your-api-host/mail/notifications"
-export PUBSUB_PUSH_SERVICE_ACCOUNT_EMAIL="pubsub-push@your-gcp-project-id.iam.gserviceaccount.com"
-
-make compose-up
-```
-
-Compose stops with a `Set ... in your local environment` error if any of these variables is missing.
-
-To tail logs from the application and worker:
-
-```bash
-docker compose logs -f app worker
-```
-
-To gracefully shut down services:
-
-```bash
-make compose-down
-```
-
-> [!IMPORTANT]
-> Detailed procedures for rolling upgrades, safe rollbacks, Gmail watch renewal, and pending-action reconciliation are documented in the [Backend Operations Runbook](docs/OPERATIONS.md).
+The Compose topology (`postgres`, `redis`, a one-shot `migrate`, the `app` and the `worker`), the required environment variables and the process roles are described in the **[operations runbook](docs/OPERATIONS.md)**.
 
 ---
 
