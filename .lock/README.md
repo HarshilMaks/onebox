@@ -46,7 +46,7 @@ Each fact has **one home**. Everywhere else links to it instead of copying it, s
 | Outside evidence | [RESEARCH_EVIDENCE.md](RESEARCH_EVIDENCE.md) | cite the section |
 | What to do when something breaks | [docs/OPERATIONS.md](../docs/OPERATIONS.md) | link only |
 
-If you are about to copy a fact into a second file, link to its home instead. Three checks run in the test suite (`tests/unit/test_lock_docs.py`): every relative link and heading anchor resolves, every status tag is in the legend below, and every doc is linked from another doc.
+If you are about to copy a fact into a second file, link to its home instead. Four checks run in the test suite (`tests/unit/test_lock_docs.py`): every relative link and heading anchor in `.lock/`, the root README and `docs/` resolves; every status tag is in the legend below; every `.lock` doc is linked from another doc; and the root README stays within 150 lines, so detail goes into `docs/` and the README links to it.
 
 ## Status legend
 

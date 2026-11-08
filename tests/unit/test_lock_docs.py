@@ -7,7 +7,11 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 LOCK = REPOSITORY_ROOT / ".lock"
-DOCS = [*sorted(LOCK.rglob("*.md")), REPOSITORY_ROOT / "docs" / "OPERATIONS.md"]
+DOCS = [
+    *sorted(LOCK.rglob("*.md")),
+    REPOSITORY_ROOT / "README.md",
+    *sorted((REPOSITORY_ROOT / "docs").glob("*.md")),
+]
 
 FENCE = re.compile(r"```.*?```", re.S)
 LINK = re.compile(r"\]\(([^)\s]+)\)")
@@ -54,6 +58,14 @@ def test_status_tags_come_from_the_readme_legend():
         f"{doc.name}: [{tag}]" for doc in DOCS for tag in TAG.findall(_text(doc)) if tag not in legend
     ]
     assert not problems, "\n".join(problems)
+
+
+README_MAX_LINES = 150
+
+
+def test_readme_stays_a_front_page():
+    length = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8").count("\n") + 1
+    assert length <= README_MAX_LINES, f"README is {length} lines; move detail into docs/ and link to it"
 
 
 def test_every_lock_doc_is_linked_from_another_doc():

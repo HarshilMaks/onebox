@@ -85,36 +85,45 @@ What is not true yet:
 
 ---
 
-## Configuration Reference
+## Documentation
 
-Every setting (name, whether it is required, its default and what it does), the three secret files, and the agent profile are in **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+| Read | For |
+|---|---|
+| [docs/API.md](docs/API.md) | Every endpoint with examples, the event stream and the action state machine |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every setting, the secret files and the agent profile |
+| [docs/POLICIES.md](docs/POLICIES.md) | Input limits, caching, the tool allowlist, retries and retention |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Docker Compose, deploying, recovery, and what to do when something breaks |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, the test gates and the annotated file tree |
+| [.lock/](.lock/README.md) | The plan: product requirements, architecture, decisions, threat model, roadmap and tasks |
 
----
+## Status and roadmap
 
-## API & Event Stream Reference
+The estimate for the Google part is about 7–15 weeks at 30 hours a week ([ROADMAP.md](.lock/ROADMAP.md)); every task, its order and its done-when are in [TASKS.md](.lock/TASKS.md).
 
-Eight endpoint groups (health, automation diagnostics, the interactive agent, event streaming, approve, reconcile, list actions, triage results) and the pending-action state machine are documented, with examples, in **[docs/API.md](docs/API.md)**. The machine-readable contract is [`docs/openapi.json`](docs/openapi.json).
+| Phase | Outcome | State |
+|---|---|---|
+| 0 Foundations | Audit fixes; every write goes through the approval ledger | next |
+| 1 Identity | Sign in with Google | planned |
+| 2 Connections | A "+" for each app, Off / Read / Propose switches, disconnect and delete | planned |
+| 3 Email to proposals | New mail becomes validated suggestions | planned |
+| 4 Web client | Review and approve in a browser | planned |
+| 6 Demo | A stranger can run it from this README | planned |
+| 5 Outlook | A second provider | stretch |
 
----
+## Layout
 
-## Operational & Security Policies
+```
+server/    API routes, services and the background worker
+tools/     agent tools and idempotency helpers
+clients/   the agent base class and prompts
+alembic/   database migrations
+tests/     unit and integration tests
+docs/      reference docs (see above)
+.lock/     plans, decisions and the threat model
+```
 
-Input limits, the generational mail cache, the per-run tool allowlist, provider retry classes, account identity and data retention are described in **[docs/POLICIES.md](docs/POLICIES.md)**.
+The full annotated tree is in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#project-structure).
 
----
+## Contributing and license
 
-## Docker Deployment
-
-The Compose topology (`postgres`, `redis`, a one-shot `migrate`, the `app` and the `worker`), the required environment variables and the process roles are described in the **[operations runbook](docs/OPERATIONS.md)**.
-
----
-
-## Testing & Release Gates
-
-`make check` runs Ruff, the OpenAPI drift check and the test suite. What each gate does, and what a green run does and does not cover, is in **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#testing-and-release-gates)**.
-
----
-
-## Project Structure
-
-The annotated file tree is in **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#project-structure)**.
+How changes are made here (small commits, tests first, minor work on `main`, larger work on a branch) is in [.lock/ENGINEERING_PRACTICES.md](.lock/ENGINEERING_PRACTICES.md). **License:** none chosen yet, so all rights are reserved until one is added.
