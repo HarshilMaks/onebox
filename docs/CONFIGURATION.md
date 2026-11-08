@@ -1,6 +1,6 @@
 # Configuration reference
 
-How OneBox is configured today. Settings are read from the process environment and from a `.env` file in the repository root. Unknown names fail startup, so a variable that only Docker Compose needs, such as `POSTGRES_PASSWORD`, must be exported in the shell and never written to `.env`. Start from `.env.example`; the local setup steps are in the [README quick start](../README.md#quick-start).
+How OneBox is configured today. Settings are read from the process environment and from a `.env` file in the repository root. Unknown names fail startup, so a variable that only Docker Compose needs, such as `POSTGRES_PASSWORD`, must be exported in the shell and never written to `.env`. Start from `.env.example`; the local setup steps are in the [development guide](DEVELOPMENT.md#local-setup-step-by-step).
 
 The application uses typed Pydantic settings (`server/config.py`) that fail fast on unknown or malformed configuration keys. Relative paths resolve from the repository root.
 

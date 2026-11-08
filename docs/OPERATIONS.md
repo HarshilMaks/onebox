@@ -111,7 +111,7 @@ To gracefully shut down services:
 make compose-down
 ```
 
-Verified by running the commands on 2026-11-07: Compose publishes no host port for PostgreSQL or Redis, so these services are reachable only from other containers. For local development outside Compose, start your own containers with a published port, for example `docker run -d -p 127.0.0.1:5432:5432 postgres:16.6-alpine`. `POSTGRES_PASSWORD` is read by Compose only; do not put it in `.env`, because the settings reject names they do not know and the API will not start.
+Verified by running the commands on 2026-11-07: Compose publishes no host port for PostgreSQL or Redis, so these services are reachable only from other containers. For local development outside Compose, start your own containers with a published port, as shown in the [development guide](DEVELOPMENT.md#2-start-postgresql-and-redis). `POSTGRES_PASSWORD` is read by Compose only; do not put it in `.env`, because the settings reject names they do not know and the API will not start.
 
 ## Deploy, migrate, and verify
 
